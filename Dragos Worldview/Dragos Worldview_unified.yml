@@ -1,0 +1,278 @@
+category: Authentication
+commonfields:
+  id: Dragos Worldview
+  version: -1
+configuration:
+- display: Fetch incidents
+  name: isFetch
+  required: false
+  type: 8
+- display: Incident type
+  name: incidentType
+  required: false
+  type: 13
+- defaultvalue: https://example.net
+  display: Server URL (e.g. https://example.net)
+  name: url
+  required: true
+  type: 0
+- display: API Token
+  name: token
+  required: true
+  type: 4
+- defaultvalue: 'true'
+  display: Trust any certificate (insecure)
+  name: insecure
+  required: false
+  type: 8
+- display: Use system proxy
+  name: proxy
+  required: false
+  type: 8
+- defaultvalue: 3 days
+  display: First fetch timestamp (<number> <time unit>, e.g., 12 hours, 7 days)
+  name: fetch_time
+  required: false
+  type: 0
+description: Integration Template
+detaileddescription: ''
+display: Dragos Worldview
+name: Dragos Worldview
+script:
+  commands:
+  - arguments:
+    - default: false
+      description: 'This is a list argument, please provide comma separated list (example:
+        "1,2,3"). This item is mandatory so it must be provided in order to use the
+        command.'
+      isArray: true
+      name: item_ids
+      required: true
+      secret: false
+    - auto: PREDEFINED
+      default: false
+      defaultValue: 'true'
+      description: Get only active items, acts as boolean
+      isArray: false
+      name: is_active
+      predefined:
+      - 'true'
+      - 'false'
+      required: false
+      secret: false
+    - default: false
+      defaultValue: '10'
+      description: limit number of returned results, to avoid flooding context
+      isArray: false
+      name: limit
+      required: false
+      secret: false
+    deprecated: false
+    description: Get items from service.
+    execution: false
+    name: example-get-items
+    outputs:
+    - contextPath: Example.Item.ID
+      description: Item ID
+      type: number
+    - contextPath: Example.Item.Name
+      description: Item name
+      type: string
+    - contextPath: Example.Item.CreatedDate
+      description: Item creation date
+      type: date
+  isfetch: false
+  runonce: false
+  script: |-
+    ''' IMPORTS '''
+
+    import json
+    import requests
+    from distutils.util import strtobool
+
+    # Disable insecure warnings
+    requests.packages.urllib3.disable_warnings()
+
+    ''' GLOBALS/PARAMS '''
+
+    USERNAME = demisto.params().get('credentials').get('identifier')
+    PASSWORD = demisto.params().get('credentials').get('password')
+    TOKEN = demisto.params().get('token')
+    # Remove trailing slash to prevent wrong URL path to service
+    SERVER = demisto.params()['url'][:-1] \
+        if (demisto.params()['url'] and demisto.params()['url'].endswith('/')) else demisto.params()['url']
+    # Should we use SSL
+    USE_SSL = not demisto.params().get('insecure', False)
+    # How many time before the first fetch to retrieve incidents
+    FETCH_TIME = demisto.params().get('fetch_time', '3 days')
+    # Service base URL
+    BASE_URL = SERVER + '/api/v2.0/'
+    # Headers to be sent in requests
+    HEADERS = {
+        'Authorization': 'Token ' + TOKEN + ':' + USERNAME + PASSWORD,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+    # Remove proxy if not set to true in params
+    if not demisto.params().get('proxy'):
+        del os.environ['HTTP_PROXY']
+        del os.environ['HTTPS_PROXY']
+        del os.environ['http_proxy']
+        del os.environ['https_proxy']
+
+
+    ''' HELPER FUNCTIONS '''
+
+
+    def http_request(method, url_suffix, params=None, data=None):
+        # A wrapper for requests lib to send our requests and handle requests and responses better
+        res = requests.request(
+            method,
+            BASE_URL + url_suffix,
+            verify=USE_SSL,
+            params=params,
+            data=data,
+            headers=HEADERS
+        )
+        # Handle error responses gracefully
+        if res.status_code not in {200}:
+            return_error('Error in API call to Example Integration [%d] - %s' % (res.status_code, res.reason))
+
+        return res.json()
+
+
+    def item_to_incident(item):
+        incident = {}
+        # Incident Title
+        incident['name'] = 'Example Incident: ' + item.get('name')
+        # Incident occurrence time, usually item creation date in service
+        incident['occurred'] = item.get('createdDate')
+        # The raw response from the service, providing full info regarding the item
+        incident['rawJSON'] = json.dumps(item)
+        return incident
+
+
+    ''' COMMANDS + REQUESTS FUNCTIONS '''
+
+
+    def test_module():
+        """
+        Performs basic get request to get item samples
+        """
+        samples = http_request('GET', 'items/samples')
+
+
+    def get_items_command():
+        """
+        Gets details about a items using IDs or some other filters
+        """
+        # Init main vars
+        headers = []
+        contents = []
+        context = {}
+        context_entries = []
+        title = ''
+        # Get arguments from user
+        item_ids = argToList(demisto.args().get('item_ids', []))
+        is_active = bool(strtobool(demisto.args().get('is_active', 'false')))
+        limit = int(demisto.args().get('limit', 10))
+        # Make request and get raw response
+        items = get_items_request(item_ids, is_active)
+        # Parse response into context & content entries
+        if items:
+            if limit:
+                items = items[:limit]
+            title = 'Example - Getting Items Details'
+
+            for item in items:
+                contents.append({
+                    'ID': item.get('id'),
+                    'Description': item.get('description'),
+                    'Name': item.get('name'),
+                    'Created Date': item.get('createdDate')
+                })
+                context_entries.append({
+                    'ID': item.get('id'),
+                    'Description': item.get('description'),
+                    'Name': item.get('name'),
+                    'CreatedDate': item.get('createdDate')
+                })
+
+            context['Example.Item(val.ID && val.ID === obj.ID)'] = context_entries
+
+        demisto.results({
+            'Type': entryTypes['note'],
+            'ContentsFormat': formats['json'],
+            'Contents': contents,
+            'ReadableContentsFormat': formats['markdown'],
+            'HumanReadable': tableToMarkdown(title, contents, removeNull=True),
+            'EntryContext': context
+        })
+
+
+    def get_items_request(item_ids, is_active):
+        # The service endpoint to request from
+        endpoint_url = 'items'
+        # Dictionary of params for the request
+        params = {
+            'ids': item_ids,
+            'isActive': is_active
+        }
+        # Send a request using our http_request wrapper
+        response = http_request('GET', endpoint_url, params)
+        # Check if response contains errors
+        if response.get('errors'):
+            return_error(response.get('errors'))
+        # Check if response contains any data to parse
+        if 'data' in response:
+            return response.get('data')
+        # If neither was found, return back empty results
+        return {}
+
+
+    def fetch_incidents():
+        last_run = demisto.getLastRun()
+        # Get the last fetch time, if exists
+        last_fetch = last_run.get('time')
+
+        # Handle first time fetch, fetch incidents retroactively
+        if last_fetch is None:
+            last_fetch, _ = parse_date_range(FETCH_TIME, to_timestamp=True)
+
+        incidents = []
+        items = get_items_request()
+        for item in items:
+            incident = item_to_incident(item)
+            incident_date = date_to_timestamp(incident['occurred'], '%Y-%m-%dT%H:%M:%S.%fZ')
+            # Update last run and add incident if the incident is newer than last fetch
+            if incident_date > last_fetch:
+                last_fetch = incident_date
+                incidents.append(incident)
+
+        demisto.setLastRun({'time' : last_fetch})
+        demisto.incidents(incidents)
+
+
+    ''' COMMANDS MANAGER / SWITCH PANEL '''
+
+    LOG('Command being called is %s' % (demisto.command()))
+
+    try:
+        if demisto.command() == 'test-module':
+            # This is the call made when pressing the integration test button.
+            test_module()
+            demisto.results('ok')
+        elif demisto.command() == 'fetch-incidents':
+            # Set and define the fetch incidents command to run after activated via integration settings.
+            fetch_incidents()
+        elif demisto.command() == 'example-get-items':
+            # An example command
+            get_items_command()
+
+    # Log exceptions
+    except Exception, e:
+        LOG(e.message)
+        LOG.print_log()
+        raise
+  type: python
+image: data:image/png;base64,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
