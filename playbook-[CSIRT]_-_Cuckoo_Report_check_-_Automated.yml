@@ -1,5 +1,5 @@
 id: 20068f59-6b25-421e-8013-6ed608f3ba49
-version: 2
+version: 3
 name: '[CSIRT] - Cuckoo Report check - Automated'
 starttaskid: "0"
 tasks:
