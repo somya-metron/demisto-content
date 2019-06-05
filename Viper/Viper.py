@@ -24,8 +24,7 @@ BASE_URL = SERVER + '/api/v3/'
 # Headers to be sent in requests
 HEADERS = {
     'Authorization': 'Token {}'.format(TOKEN),
-    'Content-Type': 'application/json',
-    'Accept': 'application/json'
+    'Content-Type': 'application/json'
 }
 # Remove proxy if not set to true in params
 if not demisto.params().get('proxy'):
@@ -74,7 +73,10 @@ def test_module():
     Performs basic get request to get item samples
     """
     samples = http_request('GET', 'test-auth/')
-    demisto.results(samples)
+    if 'message' in samples:
+        demisto.results('ok')
+    else:
+        return_error(samples)
 
 
 def get_items_command():
@@ -155,9 +157,6 @@ try:
     if demisto.command() == 'test-module':
         # This is the call made when pressing the integration test button.
         test_module()
-    elif demisto.command() == 'fetch-incidents':
-        # Set and define the fetch incidents command to run after activated via integration settings.
-        fetch_incidents()
     elif demisto.command() == 'example-get-items':
         # An example command
         get_items_command()

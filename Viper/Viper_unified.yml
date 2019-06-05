@@ -3,13 +3,11 @@ commonfields:
   id: Viper
   version: -1
 configuration:
-- defaultvalue: http://127.0.0.1:8080
-  display: Server URL (e.g. https://example.net)
+- display: Server URL (e.g. https://example.net)
   name: url
   required: true
   type: 0
-- defaultvalue: f59ef8b8c66dd3f635eafa06fa044f7d1c091fa0
-  display: API Token
+- display: API Token
   name: token
   required: true
   type: 4
@@ -96,8 +94,7 @@ script:
     # Headers to be sent in requests
     HEADERS = {
         'Authorization': 'Token {}'.format(TOKEN),
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Content-Type': 'application/json'
     }
     # Remove proxy if not set to true in params
     if not demisto.params().get('proxy'):
@@ -146,7 +143,10 @@ script:
         Performs basic get request to get item samples
         """
         samples = http_request('GET', 'test-auth/')
-        demisto.results(samples)
+        if 'message' in samples:
+            demisto.results('ok')
+        else:
+            return_error(samples)
 
 
     def get_items_command():
@@ -227,9 +227,6 @@ script:
         if demisto.command() == 'test-module':
             # This is the call made when pressing the integration test button.
             test_module()
-        elif demisto.command() == 'fetch-incidents':
-            # Set and define the fetch incidents command to run after activated via integration settings.
-            fetch_incidents()
         elif demisto.command() == 'example-get-items':
             # An example command
             get_items_command()
