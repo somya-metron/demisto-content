@@ -1,4 +1,4 @@
-category: Data Enrichment & Threat Intelligence
+category: Authentication
 commonfields:
   id: Dragos Worldview
   version: -1
@@ -34,7 +34,7 @@ configuration:
   name: fetch_time
   required: false
   type: 0
-description: Get information about indicators from Dragos Worldview
+description: Integration Template
 display: Dragos Worldview
 name: Dragos Worldview
 script:
