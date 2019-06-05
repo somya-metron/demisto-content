@@ -35,6 +35,7 @@ script:
       required: true
       secret: false
     deprecated: false
+    description: Retrieves information about a given file hash
     execution: false
     name: file
     outputs:
@@ -97,6 +98,17 @@ script:
       type: String
     - contextPath: DBotScore.Indicator
       type: String
+  - arguments:
+    - default: true
+      description: The IP to lookup
+      isArray: false
+      name: ip
+      required: true
+      secret: false
+    deprecated: false
+    description: Retrieves information about a given IP address
+    execution: false
+    name: ip
   dockerimage: demisto/python3:latest
   isfetch: false
   runonce: false
@@ -294,19 +306,23 @@ script:
             'Score': dbot_score
         }
 
+        # Build indicator output for file entry context
         file_output = {
             hash_type.upper(): hash_value
         }
 
+        # If the dbot score is 3, the file is malicious
         if dbot_score == 3:
             file_output['Malicious'] = {
                 'Vendor': 'Dragos Worldview',
-                'Description': 'Confidence: {}; Comment: {}'.format(response.get('confidence'), response.get('comment'))
+                'Description': 'Confidence: {} Comment: {}'.format(response.get('confidence'), response.get('comment'))
             }
 
-        context = {
+        ec = {
             'DBotScore': dbot_output,
-            'Dragos.File': createContext(dbot_output, id=response.get('uuid'), removeNull=True),
+            'Dragos.File': createContext(table, id=response.get('uuid'), removeNull=True),
+
+            # Using DT selectors to prevent duplicate context entry data
             'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
         }
 
@@ -316,7 +332,7 @@ script:
             'ContentsFormat': formats['json'],
             'ReadableContentsFormat': formats['markdown'],
             'HumanReadable': hr,
-            'EntryContext': context
+            'EntryContext': ec
         })
 
 

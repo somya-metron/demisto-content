@@ -199,6 +199,7 @@ def file_search_command():
         hash_type.upper(): hash_value
     }
 
+    # If the dbot score is 3, the file is malicious
     if dbot_score == 3:
         file_output['Malicious'] = {
             'Vendor': 'Dragos Worldview',
@@ -207,7 +208,9 @@ def file_search_command():
 
     ec = {
         'DBotScore': dbot_output,
-        'Dragos.File': createContext(dbot_output, id=response.get('uuid'), removeNull=True),
+        'Dragos.File': createContext(table, id=response.get('uuid'), removeNull=True),
+
+        # Using DT selectors to prevent duplicate context entry data
         'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
     }
 

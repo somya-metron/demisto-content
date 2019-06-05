@@ -34,6 +34,7 @@ script:
       required: true
       secret: false
     deprecated: false
+    description: Retrieves information about a given file hash
     execution: false
     name: file
     outputs:
@@ -96,6 +97,17 @@ script:
       type: String
     - contextPath: DBotScore.Indicator
       type: String
+  - arguments:
+    - default: true
+      description: The IP to lookup
+      isArray: false
+      name: ip
+      required: true
+      secret: false
+    deprecated: false
+    description: Retrieves information about a given IP address
+    execution: false
+    name: ip
   dockerimage: demisto/python3:latest
   isfetch: false
   runonce: false
