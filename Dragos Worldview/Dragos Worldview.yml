@@ -9,11 +9,14 @@ configuration:
   required: true
   type: 0
 - display: API Token
-  name: credentials
+  name: apitoken
   required: true
-  type: 9
-- defaultvalue: 'true'
-  display: Trust any certificate (insecure)
+  type: 4
+- display: API Secret
+  name: apisecret
+  required: true
+  type: 4
+- display: Trust any certificate (insecure)
   name: insecure
   required: false
   type: 8

@@ -13,8 +13,8 @@ requests.packages.urllib3.disable_warnings()
 
 ''' GLOBALS/PARAMS '''
 
-API_TOKEN = demisto.params().get('credentials').get('identifier')
-API_SECRET = demisto.params().get('credentials').get('password')
+API_TOKEN = demisto.params().get('apitoken')
+API_SECRET = demisto.params().get('apisecret')
 TOKEN = demisto.params().get('token')
 # Remove trailing slash to prevent wrong URL path to service
 SERVER = demisto.params()['url'][:-1] \
@@ -134,6 +134,7 @@ def indicator_confidence_to_dbot_score(confidence):
         score = 0
     return score
 
+
 ''' COMMANDS + REQUESTS FUNCTIONS '''
 
 
@@ -141,7 +142,11 @@ def test_module():
     """
     Performs basic get request to get item samples
     """
-    http_request('GET', 'products')
+    response = http_request('GET', 'products', {"page_size": 1}, None)
+    if 'total' not in response or 'error' in response:
+        return_error('Error retrieving test data.')
+    else:
+        demisto.results('ok')
 
 
 def file_search_command():
@@ -225,10 +230,102 @@ def file_search_command():
 
 
 def file_search(hash_value, hash_type):
+    """
+    Queries the REST API and passes results to file_search_command
+
+    :type hash_value: ``str``
+    :param hash_value:  File hash to be checked
+
+    :type hash_type: ``str``
+    :param hash_type:  The type of hash being retrieved (MD5, SHA1, SHA256)
+
+    :return: JSON-ified HTTP Response from REST API
+    :rtype: ``json``
+    """
     params = {"type": hash_type, "value": hash_value}
     response = http_request('GET', 'indicators', params, None)
     return response
 
+
+def ip_command():
+    """
+    Retrieves information for a given IP address from Dragos WorldView's REST API.
+
+    :return: ``dict``
+    """
+    ip_address = demisto.args().get('ip')
+
+    raw_response = file_search(hash_value, hash_type)
+    response = get_first(raw_response['indicators'])
+
+    # Exit if there was an HTTP error, or if there were no results from the API call
+    if 'total' not in raw_response or 'error' in raw_response:
+        return_error('Error retrieving results for indicator [{}]'.format(ip_address))
+    elif 'total' in raw_response and (raw_response['total'] == 0):
+        demisto.results('No information found for indicator [{}]'.format(ip_address))
+        return 0
+
+    dbot_score = indicator_confidence_to_dbot_score(response.get('confidence'))
+
+    table = {
+        'Value': response.get('value'),
+        'ActivityGroups': response.get('activity_groups'),
+        'AttackTechniques': response.get('attack_techniques'),
+        'PreAttackTechniques': response.get('pre_attack_techniques'),
+        'KillChain': response.get('kill_chain'),
+        'Comment': response.get('comment'),
+        'Confidence': response.get('confidence'),
+        'Score': dbot_score,
+        'FirstSeen': response.get('first_seen'),
+        'Updated': response.get('updated'),
+        'Products': get_first(response.get('products')),
+        'ID': response.get('id'),
+        'UUID': response.get('uuid')
+    }
+    hr_title = 'Dragos WorldView - {}'.format(ip_address)
+    hr = tableToMarkdown(hr_title, table)
+
+    dbot_output = {
+        'Type': 'ip',
+        'Indicator': ip_address,
+        'Vendor': 'Dragos Worldview',
+        'Score': dbot_score
+    }
+
+    # Build indicator output for file entry context
+    ip_output = {
+        "Address": ip_address
+    }
+
+    # If the dbot score is 3, the file is malicious
+    if dbot_score == 3:
+        ip_output['Malicious'] = {
+            'Vendor': 'Dragos Worldview',
+            'Description': 'Confidence: {} Comment: {}'.format(response.get('confidence'), response.get('comment'))
+        }
+
+    ec = {
+        'DBotScore': dbot_output,
+        'Dragos.File': createContext(table, id=response.get('uuid'), removeNull=True),
+
+        # Using DT selectors to prevent duplicate context entry data
+        'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
+    }
+
+    demisto.results({
+        'Type': entryTypes['note'],
+        'Contents': table,
+        'ContentsFormat': formats['json'],
+        'ReadableContentsFormat': formats['markdown'],
+        'HumanReadable': hr,
+        'EntryContext': ec
+    })
+
+
+def ip_search(ip_address):
+    params = {"type": "ip", "value": ip_address}
+    response = http_request('GET', 'indicators', params, None)
+    return response
 
 ''' COMMANDS MANAGER / SWITCH PANEL '''
 
@@ -239,7 +336,6 @@ try:
     if demisto.command() == 'test-module':
         # This is the call made when pressing the integration test button.
         test_module()
-        demisto.results('ok')
     elif demisto.command() == 'file':
         # An example command
         file_search_command()
