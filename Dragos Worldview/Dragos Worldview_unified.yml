@@ -1,0 +1,349 @@
+category: Data Enrichment & Threat Intelligence
+commonfields:
+  id: Dragos Worldview
+  version: -1
+configuration:
+- defaultvalue: https://intel.dragos.com
+  display: Server URL (e.g. https://example.net)
+  name: url
+  required: true
+  type: 0
+- display: API Token
+  name: credentials
+  required: true
+  type: 9
+- defaultvalue: 'true'
+  display: Trust any certificate (insecure)
+  name: insecure
+  required: false
+  type: 8
+- display: Use system proxy
+  name: proxy
+  required: false
+  type: 8
+description: Integration Template
+detaileddescription: ''
+display: Dragos Worldview
+name: Dragos Worldview
+script:
+  commands:
+  - arguments:
+    - default: true
+      description: Hash of file to check
+      isArray: false
+      name: file
+      required: true
+      secret: false
+    deprecated: false
+    execution: false
+    name: file
+    outputs:
+    - contextPath: Dragos.File.MD5
+      description: MD5 hash of file (if given)
+      type: String
+    - contextPath: Dragos.File.SHA1
+      description: SHA1 hash of file (if given)
+      type: String
+    - contextPath: Dragos.File.SHA256
+      description: SHA256 hash of file (if given)
+      type: String
+    - contextPath: Dragos.File.ActivityGroups
+      description: Activity group(s) associated with file
+      type: String
+    - contextPath: Dragos.File.AttackTechniques
+      description: MITRE ATT&CK Techniques this file is associated with
+      type: String
+    - contextPath: Dragos.File.PreAttackTechniques
+      description: MITRE Pre-ATT&CK Techniques this file is associated with
+      type: String
+    - contextPath: Dragos.File.KillChain
+      description: Stage of KillChain this file is associated with
+      type: String
+    - contextPath: Dragos.File.Comment
+      type: String
+    - contextPath: Dragos.File.Confidence
+      description: Confidence Dragos has in this indicator (low, moderate, high)
+      type: String
+    - contextPath: Dragos.File.Score
+      description: Dragos confidence extrapolated as DBot score
+      type: String
+    - contextPath: Dragos.File.FirstSeen
+      description: Date this file was first seen
+      type: Date
+    - contextPath: Dragos.File.Updated
+      description: Date the indicator record for file was last updated
+      type: Date
+    - contextPath: Dragos.File.Products
+      description: The Dragos products this indicator is associated with
+      type: String
+    - contextPath: Dragos.File.UUID
+      description: The unique ID associated with this file
+      type: String
+    - contextPath: File.MD5
+      type: String
+    - contextPath: File.SHA1
+      type: String
+    - contextPath: File.SHA256
+      type: String
+    - contextPath: File.Malicious.Vendor
+      type: String
+    - contextPath: File.Malicious.Description
+      type: String
+    - contextPath: DBotScore.Type
+      type: String
+    - contextPath: DBotScore.Vendor
+      type: String
+    - contextPath: DBotScore.Score
+      type: String
+    - contextPath: DBotScore.Indicator
+      type: String
+  dockerimage: demisto/python3:latest
+  isfetch: false
+  runonce: false
+  script: |-
+    ''' IMPORTS '''
+
+    import json
+    import requests
+    import re
+    from distutils.util import strtobool
+
+    # Disable insecure warnings
+    requests.packages.urllib3.disable_warnings()
+
+    ''' GLOBALS/PARAMS '''
+
+    API_TOKEN = demisto.params().get('credentials').get('identifier')
+    API_SECRET = demisto.params().get('credentials').get('password')
+    TOKEN = demisto.params().get('token')
+    # Remove trailing slash to prevent wrong URL path to service
+    SERVER = demisto.params()['url'][:-1] \
+        if (demisto.params()['url'] and demisto.params()['url'].endswith('/')) else demisto.params()['url']
+
+
+    BASE_URL = SERVER + '/api/v1/'                         # Service base URL
+    USE_SSL = not demisto.params().get('insecure', False)  # Should we use SSL
+    HEADERS = {                                            # Headers to be sent in requests
+        'API-Token': API_TOKEN,
+        'API-Secret': API_SECRET,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+
+    FILE_INDICATOR_TABLE_HEADERS = [
+        'Value',
+        'ActivityGroups',
+        'ATTACKTechniques',
+        'Pre-ATTACKTechniques',
+        'KillchainStage',
+        'Comment',
+        'Confidence',
+        'Score',
+        'FirstSeen',
+        'Updated',
+        'Products',
+        'UUID'
+    ]
+
+    # Remove proxy if not set to true in params
+    if not demisto.params().get('proxy'):
+        del os.environ['HTTP_PROXY']
+        del os.environ['HTTPS_PROXY']
+        del os.environ['http_proxy']
+        del os.environ['https_proxy']
+
+
+    ''' HELPER FUNCTIONS '''
+
+
+    def http_request(method, url_suffix, params=None, data=None):
+        """
+        A wrapper for requests lib to send our requests and handle requests and responses better
+
+        :type method: ``str``
+        :param method: HTTP method for the request.
+
+        :type url_suffix: ``str``
+        :param url_suffix: The suffix of the URL (endpoint)
+
+        :type params: ``dict``
+        :param params: The URL params to be passed.
+
+        :type data: ``dict``
+        :param data: The body data of the request.
+        :return:
+        """
+        try:
+            res = requests.request(
+                method,
+                BASE_URL + url_suffix,
+                verify=USE_SSL,
+                params=params,
+                data=data,
+                headers=HEADERS
+            )
+            if res.status_code not in {200}:
+                return_error('Error in API call to Dragos WorldView [{}] - {}'.format(res.status_code, res.reason))
+            return res.json()
+        except requests.exceptions.RequestException as e:
+            LOG(str(e))
+            return_error(e)
+
+
+    def get_first(iterable, default=None):
+        """
+        Returns the first item for an iterable object
+
+        :type iterable: ``obj``
+        :param iterable: An iterable object, like a dict
+
+        :type default: ``str``
+        :param default:  The default property to return
+
+        :return: First item within an iterable, or the default if not iterable
+        :rtype: ``dict``
+        """
+        if iterable:
+            for item in iterable:
+                return item
+        return default
+
+
+    def indicator_confidence_to_dbot_score(confidence):
+        """
+        Converts Dragos' indicator confidence to DBot score, based on table below.
+
+        Dragos Confidence   DBot Score Name     DBot Score
+        -----------------   ---------------     ---------
+        Unknown             Unknown             0
+        Low                 Suspicious          2
+        Moderate            Suspicious          2
+        High                Bad                 3
+
+        :type confidence: ``str``
+        :param confidence:
+
+        :return: DBot score
+        :rtype ``int``
+        """
+        if confidence.lower() in ('low', 'moderate'):
+            score = 2
+        elif confidence.lower() == 'high':
+            score = 3
+        else:
+            score = 0
+        return score
+
+    ''' COMMANDS + REQUESTS FUNCTIONS '''
+
+
+    def test_module():
+        """
+        Performs basic get request to get item samples
+        """
+        http_request('GET', 'products')
+
+
+    def file_search_command():
+        """
+        Retrieves information for a given file hash from Dragos WorldView's REST API.
+
+        :return: ``dict``
+        """
+        hash_value = demisto.args().get('file')
+        hash_type = get_hash_type(hash_value)
+
+        # API only supports md5, sha1, sha256 hashes.
+        if hash_type.lower() not in {'md5', 'sha1', 'sha256'}:
+            e_msg = 'Hash type supplied [{}] is not supported. Only MD5, SHA1, or SHA256 hashes are supported.'
+            return_error(e_msg.format(hash_type))
+
+        raw_response = file_search(hash_value, hash_type)
+        response = get_first(raw_response['indicators'])
+
+        # Exit if there was an HTTP error, or if there were no results from the API call
+        if 'total' not in raw_response or 'error' in raw_response:
+            return_error('Error retrieving results for indicator [{}]'.format(hash_value))
+        elif 'total' in raw_response and (raw_response['total'] == 0):
+            demisto.results('No information found for indicator [{}]'.format(hash_value))
+            return 0
+
+        dbot_score = indicator_confidence_to_dbot_score(response.get('confidence'))
+
+        table = {
+            'Value': response.get('value'),
+            'ActivityGroups': response.get('activity_groups'),
+            'AttackTechniques': response.get('attack_techniques'),
+            'PreAttackTechniques': response.get('pre_attack_techniques'),
+            'KillChain': response.get('kill_chain'),
+            'Comment': response.get('comment'),
+            'Confidence': response.get('confidence'),
+            'Score': dbot_score,
+            'FirstSeen': response.get('first_seen'),
+            'Updated': response.get('updated'),
+            'Products': get_first(response.get('products')),
+            'UUID': response.get('uuid')
+        }
+        hr_title = 'Dragos WorldView - {}'.format(hash_value)
+        hr = tableToMarkdown(hr_title, table)
+
+        dbot_output = {
+            'Type': 'file',
+            'Indicator': hash_value,
+            'Vendor': 'Dragos Worldview',
+            'Score': dbot_score
+        }
+
+        file_output = {
+            hash_type.upper(): hash_value
+        }
+
+        if dbot_score == 3:
+            file_output['Malicious'] = {
+                'Vendor': 'Dragos Worldview',
+                'Description': 'Confidence: {}; Comment: {}'.format(response.get('confidence'), response.get('comment'))
+            }
+
+        context = {
+            'DBotScore': dbot_output,
+            'Dragos.File': createContext(dbot_output, id=response.get('uuid'), removeNull=True),
+            'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
+        }
+
+        demisto.results({
+            'Type': entryTypes['note'],
+            'Contents': table,
+            'ContentsFormat': formats['json'],
+            'ReadableContentsFormat': formats['markdown'],
+            'HumanReadable': hr,
+            'EntryContext': context
+        })
+
+
+    def file_search(hash_value, hash_type):
+        params = {"type": hash_type, "value": hash_value}
+        response = http_request('GET', 'indicators', params, None)
+        return response
+
+
+    ''' COMMANDS MANAGER / SWITCH PANEL '''
+
+
+    LOG('Command being called is %s' % (demisto.command()))
+
+    try:
+        if demisto.command() == 'test-module':
+            # This is the call made when pressing the integration test button.
+            test_module()
+            demisto.results('ok')
+        elif demisto.command() == 'file':
+            # An example command
+            file_search_command()
+
+    # Log exceptions
+    except Exception as e:
+        LOG(e.message)
+        LOG.print_log()
+        raise
+  type: python
+image: data:image/png;base64,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

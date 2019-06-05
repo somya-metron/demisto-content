@@ -5,6 +5,7 @@ from CommonServerUserPython import *
 
 import json
 import requests
+import re
 from distutils.util import strtobool
 
 # Disable insecure warnings
@@ -12,24 +13,38 @@ requests.packages.urllib3.disable_warnings()
 
 ''' GLOBALS/PARAMS '''
 
-USERNAME = demisto.params().get('credentials').get('identifier')
-PASSWORD = demisto.params().get('credentials').get('password')
+API_TOKEN = demisto.params().get('credentials').get('identifier')
+API_SECRET = demisto.params().get('credentials').get('password')
 TOKEN = demisto.params().get('token')
 # Remove trailing slash to prevent wrong URL path to service
 SERVER = demisto.params()['url'][:-1] \
     if (demisto.params()['url'] and demisto.params()['url'].endswith('/')) else demisto.params()['url']
-# Should we use SSL
-USE_SSL = not demisto.params().get('insecure', False)
-# How many time before the first fetch to retrieve incidents
-FETCH_TIME = demisto.params().get('fetch_time', '3 days')
-# Service base URL
-BASE_URL = SERVER + '/api/v2.0/'
-# Headers to be sent in requests
-HEADERS = {
-    'Authorization': 'Token ' + TOKEN + ':' + USERNAME + PASSWORD,
+
+
+BASE_URL = SERVER + '/api/v1/'                         # Service base URL
+USE_SSL = not demisto.params().get('insecure', False)  # Should we use SSL
+HEADERS = {                                            # Headers to be sent in requests
+    'API-Token': API_TOKEN,
+    'API-Secret': API_SECRET,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
 }
+
+FILE_INDICATOR_TABLE_HEADERS = [
+    'Value',
+    'ActivityGroups',
+    'ATTACKTechniques',
+    'Pre-ATTACKTechniques',
+    'KillchainStage',
+    'Comment',
+    'Confidence',
+    'Score',
+    'FirstSeen',
+    'Updated',
+    'Products',
+    'UUID'
+]
+
 # Remove proxy if not set to true in params
 if not demisto.params().get('proxy'):
     del os.environ['HTTP_PROXY']
@@ -42,32 +57,82 @@ if not demisto.params().get('proxy'):
 
 
 def http_request(method, url_suffix, params=None, data=None):
-    # A wrapper for requests lib to send our requests and handle requests and responses better
-    res = requests.request(
-        method,
-        BASE_URL + url_suffix,
-        verify=USE_SSL,
-        params=params,
-        data=data,
-        headers=HEADERS
-    )
-    # Handle error responses gracefully
-    if res.status_code not in {200}:
-        return_error('Error in API call to Example Integration [%d] - %s' % (res.status_code, res.reason))
+    """
+    A wrapper for requests lib to send our requests and handle requests and responses better
 
-    return res.json()
+    :type method: ``str``
+    :param method: HTTP method for the request.
+
+    :type url_suffix: ``str``
+    :param url_suffix: The suffix of the URL (endpoint)
+
+    :type params: ``dict``
+    :param params: The URL params to be passed.
+
+    :type data: ``dict``
+    :param data: The body data of the request.
+    :return:
+    """
+    try:
+        res = requests.request(
+            method,
+            BASE_URL + url_suffix,
+            verify=USE_SSL,
+            params=params,
+            data=data,
+            headers=HEADERS
+        )
+        if res.status_code not in {200}:
+            return_error('Error in API call to Dragos WorldView [{}] - {}'.format(res.status_code, res.reason))
+        return res.json()
+    except requests.exceptions.RequestException as e:
+        LOG(str(e))
+        return_error(e)
 
 
-def item_to_incident(item):
-    incident = {}
-    # Incident Title
-    incident['name'] = 'Example Incident: ' + item.get('name')
-    # Incident occurrence time, usually item creation date in service
-    incident['occurred'] = item.get('createdDate')
-    # The raw response from the service, providing full info regarding the item
-    incident['rawJSON'] = json.dumps(item)
-    return incident
+def get_first(iterable, default=None):
+    """
+    Returns the first item for an iterable object
 
+    :type iterable: ``obj``
+    :param iterable: An iterable object, like a dict
+
+    :type default: ``str``
+    :param default:  The default property to return
+
+    :return: First item within an iterable, or the default if not iterable
+    :rtype: ``dict``
+    """
+    if iterable:
+        for item in iterable:
+            return item
+    return default
+
+
+def indicator_confidence_to_dbot_score(confidence):
+    """
+    Converts Dragos' indicator confidence to DBot score, based on table below.
+
+    Dragos Confidence   DBot Score Name     DBot Score
+    -----------------   ---------------     ---------
+    Unknown             Unknown             0
+    Low                 Suspicious          2
+    Moderate            Suspicious          2
+    High                Bad                 3
+
+    :type confidence: ``str``
+    :param confidence:
+
+    :return: DBot score
+    :rtype ``int``
+    """
+    if confidence.lower() in ('low', 'moderate'):
+        score = 2
+    elif confidence.lower() == 'high':
+        score = 3
+    else:
+        score = 0
+    return score
 
 ''' COMMANDS + REQUESTS FUNCTIONS '''
 
@@ -76,101 +141,94 @@ def test_module():
     """
     Performs basic get request to get item samples
     """
-    samples = http_request('GET', 'items/samples')
+    http_request('GET', 'products')
 
 
-def get_items_command():
+def file_search_command():
     """
-    Gets details about a items using IDs or some other filters
+    Retrieves information for a given file hash from Dragos WorldView's REST API.
+
+    :return: ``dict``
     """
-    # Init main vars
-    headers = []
-    contents = []
-    context = {}
-    context_entries = []
-    title = ''
-    # Get arguments from user
-    item_ids = argToList(demisto.args().get('item_ids', []))
-    is_active = bool(strtobool(demisto.args().get('is_active', 'false')))
-    limit = int(demisto.args().get('limit', 10))
-    # Make request and get raw response
-    items = get_items_request(item_ids, is_active)
-    # Parse response into context & content entries
-    if items:
-        if limit:
-            items = items[:limit]
-        title = 'Example - Getting Items Details'
+    hash_value = demisto.args().get('file')
+    hash_type = get_hash_type(hash_value)
 
-        for item in items:
-            contents.append({
-                'ID': item.get('id'),
-                'Description': item.get('description'),
-                'Name': item.get('name'),
-                'Created Date': item.get('createdDate')
-            })
-            context_entries.append({
-                'ID': item.get('id'),
-                'Description': item.get('description'),
-                'Name': item.get('name'),
-                'CreatedDate': item.get('createdDate')
-            })
+    # API only supports md5, sha1, sha256 hashes.
+    if hash_type.lower() not in {'md5', 'sha1', 'sha256'}:
+        e_msg = 'Hash type supplied [{}] is not supported. Only MD5, SHA1, or SHA256 hashes are supported.'
+        return_error(e_msg.format(hash_type))
 
-        context['Example.Item(val.ID && val.ID === obj.ID)'] = context_entries
+    raw_response = file_search(hash_value, hash_type)
+    response = get_first(raw_response['indicators'])
+
+    # Exit if there was an HTTP error, or if there were no results from the API call
+    if 'total' not in raw_response or 'error' in raw_response:
+        return_error('Error retrieving results for indicator [{}]'.format(hash_value))
+    elif 'total' in raw_response and (raw_response['total'] == 0):
+        demisto.results('No information found for indicator [{}]'.format(hash_value))
+        return 0
+
+    dbot_score = indicator_confidence_to_dbot_score(response.get('confidence'))
+
+    table = {
+        'Value': response.get('value'),
+        'ActivityGroups': response.get('activity_groups'),
+        'AttackTechniques': response.get('attack_techniques'),
+        'PreAttackTechniques': response.get('pre_attack_techniques'),
+        'KillChain': response.get('kill_chain'),
+        'Comment': response.get('comment'),
+        'Confidence': response.get('confidence'),
+        'Score': dbot_score,
+        'FirstSeen': response.get('first_seen'),
+        'Updated': response.get('updated'),
+        'Products': get_first(response.get('products')),
+        'UUID': response.get('uuid')
+    }
+    hr_title = 'Dragos WorldView - {}'.format(hash_value)
+    hr = tableToMarkdown(hr_title, table)
+
+    dbot_output = {
+        'Type': 'file',
+        'Indicator': hash_value,
+        'Vendor': 'Dragos Worldview',
+        'Score': dbot_score
+    }
+
+    # Build indicator output for file entry context
+    file_output = {
+        hash_type.upper(): hash_value
+    }
+
+    if dbot_score == 3:
+        file_output['Malicious'] = {
+            'Vendor': 'Dragos Worldview',
+            'Description': 'Confidence: {} Comment: {}'.format(response.get('confidence'), response.get('comment'))
+        }
+
+    ec = {
+        'DBotScore': dbot_output,
+        'Dragos.File': createContext(dbot_output, id=response.get('uuid'), removeNull=True),
+        'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
+    }
 
     demisto.results({
         'Type': entryTypes['note'],
+        'Contents': table,
         'ContentsFormat': formats['json'],
-        'Contents': contents,
         'ReadableContentsFormat': formats['markdown'],
-        'HumanReadable': tableToMarkdown(title, contents, removeNull=True),
-        'EntryContext': context
+        'HumanReadable': hr,
+        'EntryContext': ec
     })
 
 
-def get_items_request(item_ids, is_active):
-    # The service endpoint to request from
-    endpoint_url = 'items'
-    # Dictionary of params for the request
-    params = {
-        'ids': item_ids,
-        'isActive': is_active
-    }
-    # Send a request using our http_request wrapper
-    response = http_request('GET', endpoint_url, params)
-    # Check if response contains errors
-    if response.get('errors'):
-        return_error(response.get('errors'))
-    # Check if response contains any data to parse
-    if 'data' in response:
-        return response.get('data')
-    # If neither was found, return back empty results
-    return {}
-
-
-def fetch_incidents():
-    last_run = demisto.getLastRun()
-    # Get the last fetch time, if exists
-    last_fetch = last_run.get('time')
-
-    # Handle first time fetch, fetch incidents retroactively
-    if last_fetch is None:
-        last_fetch, _ = parse_date_range(FETCH_TIME, to_timestamp=True)
-
-    incidents = []
-    items = get_items_request()
-    for item in items:
-        incident = item_to_incident(item)
-        incident_date = date_to_timestamp(incident['occurred'], '%Y-%m-%dT%H:%M:%S.%fZ')
-        # Update last run and add incident if the incident is newer than last fetch
-        if incident_date > last_fetch:
-            last_fetch = incident_date
-            incidents.append(incident)
-
-    demisto.setLastRun({'time' : last_fetch})
-    demisto.incidents(incidents)
+def file_search(hash_value, hash_type):
+    params = {"type": hash_type, "value": hash_value}
+    response = http_request('GET', 'indicators', params, None)
+    return response
 
 
 ''' COMMANDS MANAGER / SWITCH PANEL '''
+
 
 LOG('Command being called is %s' % (demisto.command()))
 
@@ -179,15 +237,12 @@ try:
         # This is the call made when pressing the integration test button.
         test_module()
         demisto.results('ok')
-    elif demisto.command() == 'fetch-incidents':
-        # Set and define the fetch incidents command to run after activated via integration settings.
-        fetch_incidents()
-    elif demisto.command() == 'example-get-items':
+    elif demisto.command() == 'file':
         # An example command
-        get_items_command()
+        file_search_command()
 
 # Log exceptions
-except Exception, e:
+except Exception as e:
     LOG(e.message)
     LOG.print_log()
     raise
