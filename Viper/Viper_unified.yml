@@ -3,11 +3,13 @@ commonfields:
   id: Viper
   version: -1
 configuration:
-- display: Server URL (e.g. https://example.net)
+- defaultvalue: http://127.0.0.1:8080
+  display: Server URL (e.g. https://example.net)
   name: url
   required: true
   type: 0
-- display: API Token
+- defaultvalue: f59ef8b8c66dd3f635eafa06fa044f7d1c091fa0
+  display: API Token
   name: token
   required: true
   type: 4
@@ -27,46 +29,24 @@ name: Viper
 script:
   commands:
   - arguments:
-    - default: false
-      description: 'This is a list argument, please provide comma separated list (example:
-        "1,2,3"). This item is mandatory so it must be provided in order to use the
-        command.'
-      isArray: true
-      name: item_ids
-      required: true
-      secret: false
-    - auto: PREDEFINED
-      default: false
-      defaultValue: 'true'
-      description: Get only active items, acts as boolean
+    - default: true
+      description: file hash to search database with
       isArray: false
-      name: is_active
-      predefined:
-      - 'true'
-      - 'false'
-      required: false
-      secret: false
-    - default: false
-      defaultValue: '10'
-      description: limit number of returned results, to avoid flooding context
-      isArray: false
-      name: limit
+      name: file
       required: false
       secret: false
     deprecated: false
-    description: Get items from service.
+    description: Search viper database for file
     execution: false
-    name: example-get-items
+    name: file
     outputs:
-    - contextPath: Example.Item.ID
-      description: Item ID
-      type: number
-    - contextPath: Example.Item.Name
-      description: Item name
-      type: string
-    - contextPath: Example.Item.CreatedDate
-      description: Item creation date
-      type: date
+    - contextPath: Viper.File.Hash
+      description: File hash that was searched for
+      type: String
+  - deprecated: false
+    description: API test
+    execution: false
+    name: test
   dockerimage: demisto/python3:latest
   isfetch: false
   runonce: false
@@ -74,6 +54,7 @@ script:
     ''' IMPORTS '''
 
     import json
+    import re
     import requests
     from distutils.util import strtobool
 
@@ -88,13 +69,13 @@ script:
         if (demisto.params()['url'] and demisto.params()['url'].endswith('/')) else demisto.params()['url']
     # Should we use SSL
     USE_SSL = not demisto.params().get('insecure', False)
-
     # Service base URL
     BASE_URL = SERVER + '/api/v3/'
     # Headers to be sent in requests
     HEADERS = {
         'Authorization': 'Token {}'.format(TOKEN),
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
     }
     # Remove proxy if not set to true in params
     if not demisto.params().get('proxy'):
@@ -119,20 +100,27 @@ script:
         )
         # Handle error responses gracefully
         if res.status_code not in {200}:
-            return_error('Error in API call to Example Integration [%d] - %s' % (res.status_code, res.reason))
-
+            return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
         return res.json()
 
 
-    def item_to_incident(item):
-        incident = {}
-        # Incident Title
-        incident['name'] = 'Example Incident: ' + item.get('name')
-        # Incident occurrence time, usually item creation date in service
-        incident['occurred'] = item.get('createdDate')
-        # The raw response from the service, providing full info regarding the item
-        incident['rawJSON'] = json.dumps(item)
-        return incident
+    def get_first(iterable, default=None):
+        """
+        Returns the first item for an iterable object
+
+        :type iterable: ``obj``
+        :param iterable: An iterable object, like a dict
+
+        :type default: ``str``
+        :param default:  The default property to return
+
+        :return: First item within an iterable, or the default if not iterable
+        :rtype: ``dict``
+        """
+        if iterable:
+            for item in iterable:
+                return item
+        return default
 
 
     ''' COMMANDS + REQUESTS FUNCTIONS '''
@@ -149,75 +137,100 @@ script:
             return_error(samples)
 
 
-    def get_items_command():
-        """
-        Gets details about a items using IDs or some other filters
-        """
-        # Init main vars
-        headers = []
-        contents = []
-        context = {}
-        context_entries = []
-        title = ''
-        # Get arguments from user
-        item_ids = argToList(demisto.args().get('item_ids', []))
-        is_active = bool(strtobool(demisto.args().get('is_active', 'false')))
-        limit = int(demisto.args().get('limit', 10))
-        # Make request and get raw response
-        items = get_items_request(item_ids, is_active)
-        # Parse response into context & content entries
-        if items:
-            if limit:
-                items = items[:limit]
-            title = 'Example - Getting Items Details'
+    def viper_search_command():
 
-            for item in items:
-                contents.append({
-                    'ID': item.get('id'),
-                    'Description': item.get('description'),
-                    'Name': item.get('name'),
-                    'Created Date': item.get('createdDate')
-                })
-                context_entries.append({
-                    'ID': item.get('id'),
-                    'Description': item.get('description'),
-                    'Name': item.get('name'),
-                    'CreatedDate': item.get('createdDate')
-                })
+        #  Collect SHA56 hash from demisto details
+        hash_value = demisto.args().get('file')
+        hash_type = get_hash_type(hash_value)
 
-            context['Example.Item(val.ID && val.ID === obj.ID)'] = context_entries
+        # search and return Viper data
+        raw = viper_hash_search(hash_value)
+        data = get_first(raw)
+
+        # Do string manipulation in url to navigate to web interface
+        analysis = '[Viper Database Entry](' + str(raw['links']['web']) + ')'
+
+        # Grab tag strings & format tag strings
+        pretty_tags = [tag['data']['tag'] for tag in raw['data']['tag_set']]
+
+        # Table of data to populate Viper.File
+        table = {
+            'Viper ID': raw['data']['id'],
+            'Created at': raw['data']['created_at'],
+            'SHA256': raw['data']['sha256'],
+            'SHA1': raw['data']['sha1'],
+            'MD5': raw['data']['md5'],
+            'ssdeep': raw['data']['ssdeep'],
+            'Link': analysis,
+            'Tags': pretty_tags
+        }
+
+        # Version of table for context data - no markdown formatting for url
+        cd_table = {
+            'Viper ID': raw['data']['id'],
+            'Created at': raw['data']['created_at'],
+            'SHA256': raw['data']['sha256'],
+            'SHA1': raw['data']['sha1'],
+            'MD5': raw['data']['md5'],
+            'ssdeep': raw['data']['ssdeep'],
+            'Link': raw['links']['web'],
+            'Tags': pretty_tags
+        }
+        hr = tableToMarkdown('Viper Search Results', table)
+
+
+        # If it's in Viper, it's bad - right?
+        # dbot score:
+        # 0 -> Unknown
+        # 1 -> Good
+        # 2 -> Suspicious
+        # 3 -> Bad, mmkay
+        dbot_score = 3
+        dbot_output = {
+            'Type': 'file',
+            'Indicator': hash_value,
+            'Vendor': 'Viper',
+            'Score': dbot_score
+        }
+
+        # Build indicator output for file entry context
+        file_output = {
+            hash_type.upper(): hash_value,
+            'ssdeep': raw['data']['ssdeep']
+        }
+
+        # If the dbot score is 3, the file is malicious
+        if dbot_score == 3:
+            file_output['Malicious'] = {
+                'Vendor': 'Viper',
+                'Description': raw['data']['tag_set']
+            }
+
+        # Entry Context
+        ec = {
+            'DBotScore': dbot_output,
+            # This builds the 'Viper.File' context item - avoid duplicates with the value of the 'id' parameter
+            'Viper.File': createContext(cd_table, id=raw.get('id'), removeNull=True),
+            # Using DT selectors to prevent duplicate context entry data
+            'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
+        }
 
         demisto.results({
             'Type': entryTypes['note'],
+            'Contents': table,
             'ContentsFormat': formats['json'],
-            'Contents': contents,
             'ReadableContentsFormat': formats['markdown'],
-            'HumanReadable': tableToMarkdown(title, contents, removeNull=True),
-            'EntryContext': context
+            'HumanReadable': hr,
+            'EntryContext': ec
         })
 
 
-    def get_items_request(item_ids, is_active):
-        # The service endpoint to request from
-        endpoint_url = 'items'
-        # Dictionary of params for the request
-        params = {
-            'ids': item_ids,
-            'isActive': is_active
-        }
-        # Send a request using our http_request wrapper
-        response = http_request('GET', endpoint_url, params)
-        # Check if response contains errors
-        if response.get('errors'):
-            return_error(response.get('errors'))
-        # Check if response contains any data to parse
-        if 'data' in response:
-            return response.get('data')
-        # If neither was found, return back empty results
-        return {}
 
 
-
+    def viper_hash_search(hash_value):
+        url_fragment = 'project/default/malware/{}'.format(hash_value)
+        response = http_request('GET',url_fragment,None,None)
+        return response
 
     ''' COMMANDS MANAGER / SWITCH PANEL '''
 
@@ -227,9 +240,8 @@ script:
         if demisto.command() == 'test-module':
             # This is the call made when pressing the integration test button.
             test_module()
-        elif demisto.command() == 'example-get-items':
-            # An example command
-            get_items_command()
+        elif demisto.command() == 'file':
+            viper_search_command()
 
     # Log exceptions
     except Exception as e:
