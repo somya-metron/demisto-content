@@ -30,21 +30,6 @@ HEADERS = {                                            # Headers to be sent in r
     'Accept': 'application/json'
 }
 
-FILE_INDICATOR_TABLE_HEADERS = [
-    'Value',
-    'ActivityGroups',
-    'ATTACKTechniques',
-    'Pre-ATTACKTechniques',
-    'KillchainStage',
-    'Comment',
-    'Confidence',
-    'Score',
-    'FirstSeen',
-    'Updated',
-    'Products',
-    'UUID'
-]
-
 # Remove proxy if not set to true in params
 if not demisto.params().get('proxy'):
     del os.environ['HTTP_PROXY']
@@ -88,7 +73,7 @@ def http_request(method, url_suffix, params=None, data=None):
     except requests.exceptions.RequestException as e:
         LOG(str(e))
         return_error(e)
-
+    
 
 def get_first(iterable, default=None):
     """
@@ -135,6 +120,34 @@ def indicator_confidence_to_dbot_score(confidence):
     return score
 
 
+def create_standard_output(indicator):
+    standard_output = {
+        'Value': indicator.get('value'),
+        'ActivityGroups': indicator.get('activity_groups'),
+        'AttackTechniques': indicator.get('attack_techniques'),
+        'PreAttackTechniques': indicator.get('pre_attack_techniques'),
+        'KillChain': indicator.get('kill_chain'),
+        'Comment': indicator.get('comment'),
+        'Confidence': indicator.get('confidence'),
+        'Score': indicator_confidence_to_dbot_score(indicator.get('confidence')),
+        'FirstSeen': indicator.get('first_seen'),
+        'LastSeen': indicator.get('last_seen'),
+        'Updated': indicator.get('updated'),
+        'Products': get_first(indicator.get('products'))
+    }
+    return standard_output
+
+
+def create_dbot_output(indicator, score):
+    dbot_output = {
+        'Type': 'file',
+        'Indicator': indicator,
+        'Vendor': 'Dragos Worldview',
+        'Score': score
+    }
+    return dbot_output
+
+
 ''' COMMANDS + REQUESTS FUNCTIONS '''
 
 
@@ -142,7 +155,7 @@ def test_module():
     """
     Performs basic get request to get item samples
     """
-    response = http_request('GET', 'products', {"page_size": 1}, None)
+    response = http_request('GET', 'products', {"page_size": 1})
     if 'total' not in response or 'error' in response:
         return_error('Error retrieving test data.')
     else:
@@ -160,44 +173,23 @@ def file_search_command():
 
     # API only supports md5, sha1, sha256 hashes.
     if hash_type.lower() not in {'md5', 'sha1', 'sha256'}:
-        e_msg = 'Hash type supplied [{}] is not supported. Only MD5, SHA1, or SHA256 hashes are supported.'
-        return_error(e_msg.format(hash_type))
+        e_msg = 'Hash type supplied is not supported. Only MD5, SHA1, or SHA256 hashes are supported.'
+        return_error(e_msg)
 
-    raw_response = file_search(hash_value, hash_type)
+    raw = file_search(hash_type, hash_value)
+    if 'total' not in raw:
+        return_error('Error retrieving results for indicator [{}]'.format(hash_value))
+    elif raw['total'] == 0:
+        demisto.results('Dragos has no information about indicator {}'.format(hash_value))
+        return 0
     response = get_first(raw_response['indicators'])
 
-    # Exit if there was an HTTP error, or if there were no results from the API call
-    if 'total' not in raw_response or 'error' in raw_response:
-        return_error('Error retrieving results for indicator [{}]'.format(hash_value))
-    elif 'total' in raw_response and (raw_response['total'] == 0):
-        demisto.results('No information found for indicator [{}]'.format(hash_value))
-        return 0
-
     dbot_score = indicator_confidence_to_dbot_score(response.get('confidence'))
-
-    table = {
-        'Value': response.get('value'),
-        'ActivityGroups': response.get('activity_groups'),
-        'AttackTechniques': response.get('attack_techniques'),
-        'PreAttackTechniques': response.get('pre_attack_techniques'),
-        'KillChain': response.get('kill_chain'),
-        'Comment': response.get('comment'),
-        'Confidence': response.get('confidence'),
-        'Score': dbot_score,
-        'FirstSeen': response.get('first_seen'),
-        'Updated': response.get('updated'),
-        'Products': get_first(response.get('products')),
-        'UUID': response.get('uuid')
-    }
+    dbot_output = create_dbot_output(hash_value, dbot_score)
+    war_room_table = create_standard_output(response)
+    war_room_table['UUID'] = response.get('uuid')
     hr_title = 'Dragos WorldView - {}'.format(hash_value)
-    hr = tableToMarkdown(hr_title, table)
-
-    dbot_output = {
-        'Type': 'file',
-        'Indicator': hash_value,
-        'Vendor': 'Dragos Worldview',
-        'Score': dbot_score
-    }
+    hr = tableToMarkdown(hr_title, war_room_table)
 
     # Build indicator output for file entry context
     file_output = {
@@ -211,9 +203,10 @@ def file_search_command():
             'Description': 'Confidence: {} Comment: {}'.format(response.get('confidence'), response.get('comment'))
         }
 
+    # Create the entry context
     ec = {
         'DBotScore': dbot_output,
-        'Dragos.File': createContext(table, id=response.get('uuid'), removeNull=True),
+        'Dragos.File': createContext(war_room_table, id=response.get('uuid'), removeNull=True),
 
         # Using DT selectors to prevent duplicate context entry data
         'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
@@ -221,7 +214,7 @@ def file_search_command():
 
     demisto.results({
         'Type': entryTypes['note'],
-        'Contents': table,
+        'Contents': war_room_table,
         'ContentsFormat': formats['json'],
         'ReadableContentsFormat': formats['markdown'],
         'HumanReadable': hr,
@@ -243,11 +236,11 @@ def file_search(hash_value, hash_type):
     :rtype: ``json``
     """
     params = {"type": hash_type, "value": hash_value}
-    response = http_request('GET', 'indicators', params, None)
+    response = http_request('GET', 'indicators', params)
     return response
 
 
-def ip_command():
+def ip_search_command():
     """
     Retrieves information for a given IP address from Dragos WorldView's REST API.
 
@@ -255,71 +248,18 @@ def ip_command():
     """
     ip_address = demisto.args().get('ip')
 
-    raw_response = file_search(hash_value, hash_type)
+    raw_response = ip_search(ip_address)
+    if 'total' not in raw_response:
+        return_error('Error retrieving results for indicator [{}]'.format(ip_address))
+    elif raw_response['total'] == 0:
+        demisto.results('Dragos has no information about indicator [{}]'.format(ip_address))
+        return 0
     response = get_first(raw_response['indicators'])
 
-    # Exit if there was an HTTP error, or if there were no results from the API call
-    if 'total' not in raw_response or 'error' in raw_response:
-        return_error('Error retrieving results for indicator [{}]'.format(ip_address))
-    elif 'total' in raw_response and (raw_response['total'] == 0):
-        demisto.results('No information found for indicator [{}]'.format(ip_address))
-        return 0
 
-    dbot_score = indicator_confidence_to_dbot_score(response.get('confidence'))
 
-    table = {
-        'Value': response.get('value'),
-        'ActivityGroups': response.get('activity_groups'),
-        'AttackTechniques': response.get('attack_techniques'),
-        'PreAttackTechniques': response.get('pre_attack_techniques'),
-        'KillChain': response.get('kill_chain'),
-        'Comment': response.get('comment'),
-        'Confidence': response.get('confidence'),
-        'Score': dbot_score,
-        'FirstSeen': response.get('first_seen'),
-        'Updated': response.get('updated'),
-        'Products': get_first(response.get('products')),
-        'ID': response.get('id'),
-        'UUID': response.get('uuid')
-    }
-    hr_title = 'Dragos WorldView - {}'.format(ip_address)
-    hr = tableToMarkdown(hr_title, table)
 
-    dbot_output = {
-        'Type': 'ip',
-        'Indicator': ip_address,
-        'Vendor': 'Dragos Worldview',
-        'Score': dbot_score
-    }
 
-    # Build indicator output for file entry context
-    ip_output = {
-        "Address": ip_address
-    }
-
-    # If the dbot score is 3, the file is malicious
-    if dbot_score == 3:
-        ip_output['Malicious'] = {
-            'Vendor': 'Dragos Worldview',
-            'Description': 'Confidence: {} Comment: {}'.format(response.get('confidence'), response.get('comment'))
-        }
-
-    ec = {
-        'DBotScore': dbot_output,
-        'Dragos.File': createContext(table, id=response.get('uuid'), removeNull=True),
-
-        # Using DT selectors to prevent duplicate context entry data
-        'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
-    }
-
-    demisto.results({
-        'Type': entryTypes['note'],
-        'Contents': table,
-        'ContentsFormat': formats['json'],
-        'ReadableContentsFormat': formats['markdown'],
-        'HumanReadable': hr,
-        'EntryContext': ec
-    })
 
 
 def ip_search(ip_address):
@@ -333,12 +273,15 @@ def ip_search(ip_address):
 LOG('Command being called is %s' % (demisto.command()))
 
 try:
-    if demisto.command() == 'test-module':
+    command = demisto.command()
+    if command == 'test-module':
         # This is the call made when pressing the integration test button.
         test_module()
-    elif demisto.command() == 'file':
+    elif command == 'file':
         # An example command
         file_search_command()
+    elif command == 'ip':
+        ip_search_command()
 
 # Log exceptions
 except Exception as e:
