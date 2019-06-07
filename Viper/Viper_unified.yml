@@ -141,7 +141,6 @@ script:
 
         #  Collect SHA56 hash from demisto details
         hash_value = demisto.args().get('file')
-        hash_type = get_hash_type(hash_value)
 
         # search and return Viper data
         raw = viper_hash_search(hash_value)
@@ -237,11 +236,28 @@ script:
     LOG('Command being called is %s' % (demisto.command()))
 
     try:
+        #  Collect SHA56 hash from demisto details
+        hash_value = demisto.args().get('file')
+        hash_type = get_hash_type(hash_value)
+
+        # Check if hash is SHA256 - Viper API only supports SHA256
+        if hash_type.lower() != 'sha256':
+            error = True
+        else:
+            error = False
+
         if demisto.command() == 'test-module':
             # This is the call made when pressing the integration test button.
             test_module()
-        elif demisto.command() == 'file':
+        elif demisto.command() == 'file' and not error:
             viper_search_command()
+        else:
+            warning = {
+                'Type': 11,
+                'Contents': 'Hash not recognized. Please use SHA256 hashes',
+                'ContentsFormat': formats['markdown']
+            }
+            demisto.results(warning)
 
     # Log exceptions
     except Exception as e:
