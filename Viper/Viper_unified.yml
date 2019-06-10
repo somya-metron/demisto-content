@@ -47,15 +47,27 @@ script:
     description: API test
     execution: false
     name: test
+  - arguments:
+    - default: false
+      description: EntryID of file
+      isArray: true
+      name: EntryID
+      required: true
+      secret: false
+    deprecated: false
+    description: upload a file to Viper
+    execution: false
+    name: upload
   dockerimage: demisto/python3:latest
   isfetch: false
   runonce: false
   script: |-
     ''' IMPORTS '''
-
+    import shutil
     import json
     import re
     import requests
+    import os
     from distutils.util import strtobool
 
     # Disable insecure warnings
@@ -88,7 +100,7 @@ script:
     ''' HELPER FUNCTIONS '''
 
 
-    def http_request(method, url_suffix, params=None, data=None):
+    def http_request(method, url_suffix, params=None, data=None, files=None):
         # A wrapper for requests lib to send our requests and handle requests and responses better
         res = requests.request(
             method,
@@ -96,7 +108,8 @@ script:
             verify=USE_SSL,
             params=params,
             data=data,
-            headers=HEADERS
+            headers=HEADERS,
+            files=files
         )
         # Handle error responses gracefully
         if res.status_code not in {200}:
@@ -223,41 +236,81 @@ script:
             'EntryContext': ec
         })
 
-
-
-
     def viper_hash_search(hash_value):
         url_fragment = 'project/default/malware/{}'.format(hash_value)
-        response = http_request('GET',url_fragment,None,None)
+        response = http_request('GET', url_fragment, None, None, None)
         return response
+
+
+    def viper_upload_command():
+
+        # Get entry id, filename and filepath
+        file_entry = demisto.args().get('EntryID')
+        filename = demisto.getFilePath(file_entry)['name']
+        filepath = demisto.getFilePath(file_entry)['path']
+
+
+        #TODO: Path is same as file_entry, should be returning a file path, right?
+        #TODO: Fix 400 Bad Request
+
+        #demisto.results(file_entry)
+        demisto.results(filepath)  # Is the filepath actually a filepath?
+        demisto.results(filename)
+
+        # send file to Viper
+        response = viper_upload(filename)
+
+    '''
+        if response == 200:
+            demisto.results("File upload completed")
+        elif response == 403:
+            demisto.results("Error: API Key is incorrect")
+        else:
+            error_msg = response.json()['errors'][0]['message']
+            return_error(response.reason, error_msg)
+    '''
+
+    def viper_upload(path):
+        url_fragment = 'project/default/malware/upload/'
+        try:
+            with open(path, 'rb') as viper_file:
+                demisto.results(viper_file) # Test if URL is correct
+                upload = http_request('POST', url_fragment, None, None, files={'file': viper_file})
+        except Exception:
+            demisto.results("Error: Could not upload file")
+            return
+        return upload
+
 
     ''' COMMANDS MANAGER / SWITCH PANEL '''
 
     LOG('Command being called is %s' % (demisto.command()))
 
     try:
-        #  Collect SHA56 hash from demisto details
-        hash_value = demisto.args().get('file')
-        hash_type = get_hash_type(hash_value)
-
-        # Check if hash is SHA256 - Viper API only supports SHA256
-        if hash_type.lower() != 'sha256':
-            error = True
-        else:
-            error = False
-
         if demisto.command() == 'test-module':
             # This is the call made when pressing the integration test button.
             test_module()
-        elif demisto.command() == 'file' and not error:
-            viper_search_command()
-        else:
-            warning = {
-                'Type': 11,
-                'Contents': 'Hash not recognized. Please use SHA256 hashes',
-                'ContentsFormat': formats['markdown']
-            }
-            demisto.results(warning)
+        elif demisto.command() == 'file':
+            #  Collect SHA56 hash from demisto details
+            hash_value = demisto.args().get('file')
+            hash_type = get_hash_type(hash_value)
+
+            # Check if hash is SHA256 - Viper API only supports SHA256
+            if hash_type.lower() != 'sha256':
+                error = True
+            else:
+                error = False
+            if not error:
+                viper_search_command()
+            else:
+                warning = {
+                    'Type': 11,
+                    'Contents': 'Hash not recognized. Please use SHA256 hashes',
+                    'ContentsFormat': formats['markdown']
+                }
+                demisto.results(warning)
+        elif demisto.command() == 'upload':
+            viper_upload_command()
 
     # Log exceptions
     except Exception as e:

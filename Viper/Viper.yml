@@ -46,6 +46,17 @@ script:
     description: API test
     execution: false
     name: test
+  - arguments:
+    - default: false
+      description: EntryID of file
+      isArray: true
+      name: EntryID
+      required: true
+      secret: false
+    deprecated: false
+    description: upload a file to Viper
+    execution: false
+    name: upload
   dockerimage: demisto/python3:latest
   isfetch: false
   runonce: false
