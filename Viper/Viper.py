@@ -51,7 +51,9 @@ def http_request(method, url_suffix, params=None, data=None, files=None):
         files=files
     )
     # Handle error responses gracefully
-    if res.status_code not in {200}:
+    if res.status_code in {404}:
+        return False
+    elif res.status_code not in {200}:
         return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
     return res.json()
 
@@ -93,87 +95,97 @@ def viper_search_command():
 
     #  Collect SHA56 hash from demisto details
     hash_value = demisto.args().get('file')
+    hash_type = get_hash_type(hash_value)
 
     # search and return Viper data
     raw = viper_hash_search(hash_value)
-    data = get_first(raw)
+    if not raw:
+        warning = {
+            'Type': 11,
+            'Contents': 'File not found in Viper',
+            'ContentsFormat': formats['markdown']
+        }
+        demisto.results(warning)
+    else:
+        data = get_first(raw)
 
-    # Do string manipulation in url to navigate to web interface
-    analysis = '[Viper Database Entry](' + str(raw['links']['web']) + ')'
-
-    # Grab tag strings & format tag strings
-    pretty_tags = [tag['data']['tag'] for tag in raw['data']['tag_set']]
-
-    # Table of data to populate Viper.File
-    table = {
-        'Viper ID': raw['data']['id'],
-        'Created at': raw['data']['created_at'],
-        'SHA256': raw['data']['sha256'],
-        'SHA1': raw['data']['sha1'],
-        'MD5': raw['data']['md5'],
-        'ssdeep': raw['data']['ssdeep'],
-        'Link': analysis,
-        'Tags': pretty_tags
-    }
-
-    # Version of table for context data - no markdown formatting for url
-    cd_table = {
-        'Viper ID': raw['data']['id'],
-        'Created at': raw['data']['created_at'],
-        'SHA256': raw['data']['sha256'],
-        'SHA1': raw['data']['sha1'],
-        'MD5': raw['data']['md5'],
-        'ssdeep': raw['data']['ssdeep'],
-        'Link': raw['links']['web'],
-        'Tags': pretty_tags
-    }
-    hr = tableToMarkdown('Viper Search Results', table)
+        # Do string manipulation in url to navigate to web interface
+        analysis = '[Viper Database Entry](' + str(raw['links']['web']) + ')'
 
 
-    # If it's in Viper, it's bad - right?
-    # dbot score:
-    # 0 -> Unknown
-    # 1 -> Good
-    # 2 -> Suspicious
-    # 3 -> Bad, mmkay
-    dbot_score = 3
-    dbot_output = {
-        'Type': 'file',
-        'Indicator': hash_value,
-        'Vendor': 'Viper',
-        'Score': dbot_score
-    }
+        # Grab tag strings & format tag strings
+        pretty_tags = [tag['data']['tag'] for tag in raw['data']['tag_set']]
 
-    # Build indicator output for file entry context
-    file_output = {
-        hash_type.upper(): hash_value,
-        'ssdeep': raw['data']['ssdeep']
-    }
-
-    # If the dbot score is 3, the file is malicious
-    if dbot_score == 3:
-        file_output['Malicious'] = {
-            'Vendor': 'Viper',
-            'Description': raw['data']['tag_set']
+        # Table of data to populate Viper.File
+        table = {
+            'Viper ID': raw['data']['id'],
+            'Created at': raw['data']['created_at'],
+            'SHA256': raw['data']['sha256'],
+            'SHA1': raw['data']['sha1'],
+            'MD5': raw['data']['md5'],
+            'ssdeep': raw['data']['ssdeep'],
+            'Link': analysis,
+            'Tags': pretty_tags
         }
 
-    # Entry Context
-    ec = {
-        'DBotScore': dbot_output,
-        # This builds the 'Viper.File' context item - avoid duplicates with the value of the 'id' parameter
-        'Viper.File': createContext(cd_table, id=raw.get('id'), removeNull=True),
-        # Using DT selectors to prevent duplicate context entry data
-        'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
-    }
+        # Version of table for context data - no markdown formatting for url
+        cd_table = {
+            'Viper ID': raw['data']['id'],
+            'Created at': raw['data']['created_at'],
+            'SHA256': raw['data']['sha256'],
+            'SHA1': raw['data']['sha1'],
+            'MD5': raw['data']['md5'],
+            'ssdeep': raw['data']['ssdeep'],
+            'Link': raw['links']['web'],
+            'Tags': pretty_tags
+        }
+        hr = tableToMarkdown('Viper Search Results', table)
 
-    demisto.results({
-        'Type': entryTypes['note'],
-        'Contents': table,
-        'ContentsFormat': formats['json'],
-        'ReadableContentsFormat': formats['markdown'],
-        'HumanReadable': hr,
-        'EntryContext': ec
-    })
+
+        # If it's in Viper, it's bad - right?
+        # dbot score:
+        # 0 -> Unknown
+        # 1 -> Good
+        # 2 -> Suspicious
+        # 3 -> Bad, mmkay
+        dbot_score = 3
+        dbot_output = {
+            'Type': 'file',
+            'Indicator': hash_value,
+            'Vendor': 'Viper',
+            'Score': dbot_score
+        }
+
+        # Build indicator output for file entry context
+        file_output = {
+            hash_type.upper(): hash_value,
+            'ssdeep': raw['data']['ssdeep']
+        }
+
+        # If the dbot score is 3, the file is malicious
+        if dbot_score == 3:
+            file_output['Malicious'] = {
+                'Vendor': 'Viper',
+                'Description': pretty_tags
+            }
+
+        # Entry Context
+        ec = {
+            'DBotScore': dbot_output,
+            # This builds the 'Viper.File' context item - avoid duplicates with the value of the 'id' parameter
+            'Viper.File': createContext(cd_table, id=raw.get('id'), removeNull=True),
+            # Using DT selectors to prevent duplicate context entry data
+            'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
+        }
+
+        demisto.results({
+            'Type': entryTypes['note'],
+            'Contents': table,
+            'ContentsFormat': formats['json'],
+            'ReadableContentsFormat': formats['markdown'],
+            'HumanReadable': hr,
+            'EntryContext': ec
+        })
 
 def viper_hash_search(hash_value):
     url_fragment = 'project/default/malware/{}'.format(hash_value)
