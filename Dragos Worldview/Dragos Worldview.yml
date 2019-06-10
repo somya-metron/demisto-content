@@ -73,6 +73,9 @@ script:
     - contextPath: Dragos.File.FirstSeen
       description: Date this file was first seen
       type: Date
+    - contextPath: Dragos.File.LastSeen
+      type: Date
+      description: Date this File was last seen
     - contextPath: Dragos.File.Updated
       description: Date the indicator record for file was last updated
       type: Date
@@ -111,6 +114,54 @@ script:
     description: Retrieves information about a given IP address
     execution: false
     name: ip
+    outputs:
+    - contextPath: Dragos.IP.ActivityGroups
+      description: Activity group(s) associated with IP
+      type: String
+    - contextPath: Dragos.IP.AttackTechniques
+      description: MITRE ATT&CK Techniques this IP has been associated with
+      type: String
+    - contextPath: Dragos.IP.PreAttackTechniques
+      description: MITRE Pre-ATT&CK Techniques this IP has been associated with
+      type: String
+    - contextPath: Dragos.IP.KillChain
+      description: Stage of KillChain this IP is associated with
+      type: String
+    - contextPath: Dragos.IP.Comment
+      type: String
+    - contextPath: Dragos.IP.Confidence
+      description: Confidence Dragos has in this indicator (low, moderate, high)
+      type: String
+    - contextPath: Dragos.IP.Score
+      description: Dragos confidence extrapolated as DBot score
+      type: String
+    - contextPath: Dragos.IP.FirstSeen
+      description: Date this IP was first seen
+      type: Date
+    - contextPath: Dragos.IP.LastSeen
+      type: Date
+      description: Date this IP was last seen
+    - contextPath: Dragos.IP.Updated
+      description: Date the indicator record for IP was last updated
+      type: Date
+    - contextPath: Dragos.IP.Products
+      description: The Dragos products this indicator is associated with
+      type: String
+    - contextPath: IP.Address
+      description: The IP address being searched for
+      type: String
+    - contextPath: IP.Malicious.Vendor
+      type: String
+    - contextPath: IP.Malicious.Description
+      type: String
+    - contextPath: DBotScore.Type
+      type: String
+    - contextPath: DBotScore.Vendor
+      type: String
+    - contextPath: DBotScore.Score
+      type: String
+    - contextPath: DBotScore.Indicator
+      type: String
   dockerimage: demisto/python3:latest
   isfetch: false
   runonce: false
