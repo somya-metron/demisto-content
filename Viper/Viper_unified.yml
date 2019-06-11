@@ -61,108 +61,284 @@ script:
   dockerimage: demisto/python3:latest
   isfetch: false
   runonce: false
-  script: "''' IMPORTS '''\nimport shutil\nimport json\nimport re\nimport requests\n\
-    import os\nfrom distutils.util import strtobool\n\n# Disable insecure warnings\n\
-    requests.packages.urllib3.disable_warnings()\n\n''' GLOBALS/PARAMS '''\n\nTOKEN\
-    \ = demisto.params().get('token')\n# Remove trailing slash to prevent wrong URL\
-    \ path to service\nSERVER = demisto.params()['url'][:-1] \\\n    if (demisto.params()['url']\
-    \ and demisto.params()['url'].endswith('/')) else demisto.params()['url']\n# Should\
-    \ we use SSL\nUSE_SSL = not demisto.params().get('insecure', False)\n# Service\
-    \ base URL\nBASE_URL = SERVER + '/api/v3/'\n# Headers to be sent in requests\n\
-    HEADERS = {\n    'Authorization': 'Token {}'.format(TOKEN),\n    'Content-Type':\
-    \ 'application/json',\n    'Accept': 'application/json'\n}\n# Remove proxy if\
-    \ not set to true in params\nif not demisto.params().get('proxy'):\n    del os.environ['HTTP_PROXY']\n\
-    \    del os.environ['HTTPS_PROXY']\n    del os.environ['http_proxy']\n    del\
-    \ os.environ['https_proxy']\n\n\n''' HELPER FUNCTIONS '''\n\n\ndef http_request(method,\
-    \ url_suffix, params=None, data=None, files=None):\n    # A wrapper for requests\
-    \ lib to send our requests and handle requests and responses better\n    res =\
-    \ requests.request(\n        method,\n        BASE_URL + url_suffix,\n       \
-    \ verify=USE_SSL,\n        params=params,\n        data=data,\n        headers=HEADERS,\n\
-    \        files=files\n    )\n    # Handle error responses gracefully\n    if res.status_code\
-    \ in {404}:\n        return False\n    elif res.status_code not in {200}:\n  \
-    \      return_error('Error in API call to Viper [%d] - %s' % (res.status_code,\
-    \ res.reason))\n    return res.json()\n\n\ndef get_first(iterable, default=None):\n\
-    \    \"\"\"\n    Returns the first item for an iterable object\n\n    :type iterable:\
-    \ ``obj``\n    :param iterable: An iterable object, like a dict\n\n    :type default:\
-    \ ``str``\n    :param default:  The default property to return\n\n    :return:\
-    \ First item within an iterable, or the default if not iterable\n    :rtype: ``dict``\n\
-    \    \"\"\"\n    if iterable:\n        for item in iterable:\n            return\
-    \ item\n    return default\n\n\n''' COMMANDS + REQUESTS FUNCTIONS '''\n\n\ndef\
-    \ test_module():\n    \"\"\"\n    Performs basic get request to get item samples\n\
-    \    \"\"\"\n    samples = http_request('GET', 'test-auth/')\n    if 'message'\
-    \ in samples:\n        demisto.results('ok')\n    else:\n        return_error(samples)\n\
-    \n\ndef viper_search_command():\n\n    #  Collect SHA56 hash from demisto details\n\
-    \    hash_value = demisto.args().get('file')\n    hash_type = get_hash_type(hash_value)\n\
-    \n    # search and return Viper data\n    raw = viper_hash_search(hash_value)\n\
-    \    if not raw:\n        warning = {\n            'Type': 11,\n            'Contents':\
-    \ 'File not found in Viper',\n            'ContentsFormat': formats['markdown']\n\
-    \        }\n        demisto.results(warning)\n    else:\n        data = get_first(raw)\n\
-    \n        # Do string manipulation in url to navigate to web interface\n     \
-    \   analysis = '[Viper Database Entry](' + str(raw['links']['web']) + ')'\n\n\n\
-    \        # Grab tag strings & format tag strings\n        pretty_tags = [tag['data']['tag']\
-    \ for tag in raw['data']['tag_set']]\n\n        # Table of data to populate Viper.File\n\
-    \        table = {\n            'Viper ID': raw['data']['id'],\n            'Created\
-    \ at': raw['data']['created_at'],\n            'SHA256': raw['data']['sha256'],\n\
-    \            'SHA1': raw['data']['sha1'],\n            'MD5': raw['data']['md5'],\n\
-    \            'ssdeep': raw['data']['ssdeep'],\n            'Link': analysis,\n\
-    \            'Tags': pretty_tags\n        }\n\n        # Version of table for\
-    \ context data - no markdown formatting for url\n        cd_table = {\n      \
-    \      'Viper ID': raw['data']['id'],\n            'Created at': raw['data']['created_at'],\n\
-    \            'SHA256': raw['data']['sha256'],\n            'SHA1': raw['data']['sha1'],\n\
-    \            'MD5': raw['data']['md5'],\n            'ssdeep': raw['data']['ssdeep'],\n\
-    \            'Link': raw['links']['web'],\n            'Tags': pretty_tags\n \
-    \       }\n        hr = tableToMarkdown('Viper Search Results', table)\n\n\n \
-    \       # If it's in Viper, it's bad - right?\n        # dbot score:\n       \
-    \ # 0 -> Unknown\n        # 1 -> Good\n        # 2 -> Suspicious\n        # 3\
-    \ -> Bad, mmkay\n        dbot_score = 3\n        dbot_output = {\n           \
-    \ 'Type': 'file',\n            'Indicator': hash_value,\n            'Vendor':\
-    \ 'Viper',\n            'Score': dbot_score\n        }\n\n        # Build indicator\
-    \ output for file entry context\n        file_output = {\n            hash_type.upper():\
-    \ hash_value,\n            'ssdeep': raw['data']['ssdeep']\n        }\n\n    \
-    \    # If the dbot score is 3, the file is malicious\n        if dbot_score ==\
-    \ 3:\n            file_output['Malicious'] = {\n                'Vendor': 'Viper',\n\
-    \                'Description': pretty_tags\n            }\n\n        # Entry\
-    \ Context\n        ec = {\n            'DBotScore': dbot_output,\n           \
-    \ # This builds the 'Viper.File' context item - avoid duplicates with the value\
-    \ of the 'id' parameter\n            'Viper.File': createContext(cd_table, id=raw.get('id'),\
-    \ removeNull=True),\n            # Using DT selectors to prevent duplicate context\
-    \ entry data\n            'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1\
-    \ == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output\n     \
-    \   }\n    \n        demisto.results({\n            'Type': entryTypes['note'],\n\
-    \            'Contents': table,\n            'ContentsFormat': formats['json'],\n\
-    \            'ReadableContentsFormat': formats['markdown'],\n            'HumanReadable':\
-    \ hr,\n            'EntryContext': ec\n        })\n\ndef viper_hash_search(hash_value):\n\
-    \    url_fragment = 'project/default/malware/{}'.format(hash_value)\n    response\
-    \ = http_request('GET', url_fragment, None, None, None)\n    return response\n\
-    \n\ndef viper_upload_command():\n\n    # Get entry id, filename and filepath\n\
-    \    file_entry = demisto.args().get('EntryID')\n    filename = demisto.getFilePath(file_entry)['name']\n\
-    \    filepath = demisto.getFilePath(file_entry)['path']\n\n\n    #TODO: Path is\
-    \ same as file_entry, should be returning a file path, right?\n    #TODO: Fix\
-    \ 400 Bad Request\n\n    #demisto.results(file_entry)\n    demisto.results(filepath)\
-    \  # Is the filepath actually a filepath?\n    demisto.results(filename)\n\n \
-    \   # send file to Viper\n    response = viper_upload(filename)\n\n'''\n    if\
-    \ response == 200:\n        demisto.results(\"File upload completed\")\n    elif\
-    \ response == 403:\n        demisto.results(\"Error: API Key is incorrect\")\n\
-    \    else:\n        error_msg = response.json()['errors'][0]['message']\n    \
-    \    return_error(response.reason, error_msg)\n'''\n\ndef viper_upload(path):\n\
-    \    url_fragment = 'project/default/malware/upload/'\n    try:\n        with\
-    \ open(path, 'rb') as viper_file:\n            demisto.results(viper_file) # Test\
-    \ if URL is correct\n            upload = http_request('POST', url_fragment, None,\
-    \ None, files={'file': viper_file})\n    except Exception:\n        demisto.results(\"\
-    Error: Could not upload file\")\n        return\n    return upload\n\n\n''' COMMANDS\
-    \ MANAGER / SWITCH PANEL '''\n\nLOG('Command being called is %s' % (demisto.command()))\n\
-    \ntry:\n    if demisto.command() == 'test-module':\n        # This is the call\
-    \ made when pressing the integration test button.\n        test_module()\n   \
-    \ elif demisto.command() == 'file':\n        #  Collect SHA56 hash from demisto\
-    \ details\n        hash_value = demisto.args().get('file')\n        hash_type\
-    \ = get_hash_type(hash_value)\n\n        # Check if hash is SHA256 - Viper API\
-    \ only supports SHA256\n        if hash_type.lower() != 'sha256':\n          \
-    \  error = True\n        else:\n            error = False\n        if not error:\n\
-    \            viper_search_command()\n        else:\n            warning = {\n\
-    \                'Type': 11,\n                'Contents': 'Hash not recognized.\
-    \ Please use SHA256 hashes',\n                'ContentsFormat': formats['markdown']\n\
-    \            }\n            demisto.results(warning)\n    elif demisto.command()\
-    \ == 'upload':\n        viper_upload_command()\n\n# Log exceptions\nexcept Exception\
-    \ as e:\n    LOG(e.message)\n    LOG.print_log()\n    raise"
+  script: |-
+    ''' IMPORTS '''
+    import shutil
+    import json
+    import re
+    import requests
+    import os
+    from distutils.util import strtobool
+
+    # Disable insecure warnings
+    requests.packages.urllib3.disable_warnings()
+
+    ''' GLOBALS/PARAMS '''
+
+    TOKEN = demisto.params().get('token')
+    # Remove trailing slash to prevent wrong URL path to service
+    SERVER = demisto.params()['url'][:-1] \
+        if (demisto.params()['url'] and demisto.params()['url'].endswith('/')) else demisto.params()['url']
+    # Should we use SSL
+    USE_SSL = not demisto.params().get('insecure', False)
+    # Service base URL
+    BASE_URL = SERVER + '/api/v3/'
+    # Headers to be sent in requests
+    HEADERS = {
+        'Authorization': 'Token {}'.format(TOKEN),
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+
+    POST_HEADERS = {
+        'Authorization': 'Token {}'.format(TOKEN),
+        'Content-Type': 'multipart/form-data',
+        'Accept': 'application/json'
+    }
+
+    # Remove proxy if not set to true in params
+    if not demisto.params().get('proxy'):
+        del os.environ['HTTP_PROXY']
+        del os.environ['HTTPS_PROXY']
+        del os.environ['http_proxy']
+        del os.environ['https_proxy']
+
+
+    ''' HELPER FUNCTIONS '''
+
+
+    def http_request(method, url_suffix, params=None, data=None, files=None):
+        # A wrapper for requests lib to send our requests and handle requests and responses better
+        res = requests.request(
+            method,
+            BASE_URL + url_suffix,
+            verify=USE_SSL,
+            params=params,
+            data=data,
+            headers=HEADERS,
+            files=files
+        )
+        # Handle error responses gracefully
+        if res.status_code in {404}:
+            return False
+        elif res.status_code not in {200}:
+            return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
+        return res.json()
+
+    def http_post(params=None, data=None, files=None):
+        # A wrapper for requests lib to send our requests and handle requests and responses better
+        res = requests.request(
+            url=BASE_URL + 'project/default/malware/upload/',
+            method='POST',
+            verify=USE_SSL,
+            params=params,
+            data=data,
+            headers=HEADERS,
+            files=files
+        )
+        # Handle error responses gracefully
+        if res.status_code not in {200}:
+            return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
+        return res.json()
+
+    def get_first(iterable, default=None):
+        """
+        Returns the first item for an iterable object
+
+        :type iterable: ``obj``
+        :param iterable: An iterable object, like a dict
+
+        :type default: ``str``
+        :param default:  The default property to return
+
+        :return: First item within an iterable, or the default if not iterable
+        :rtype: ``dict``
+        """
+        if iterable:
+            for item in iterable:
+                return item
+        return default
+
+
+    ''' COMMANDS + REQUESTS FUNCTIONS '''
+
+
+    def test_module():
+        """
+        Performs basic get request to get item samples
+        """
+        samples = http_request('GET', 'test-auth/')
+        if 'message' in samples:
+            demisto.results('ok')
+        else:
+            return_error(samples)
+
+
+    def viper_search_command():
+
+        #  Collect SHA56 hash from demisto details
+        hash_value = demisto.args().get('file')
+        hash_type = get_hash_type(hash_value)
+
+        # search and return Viper data
+        raw = viper_hash_search(hash_value)
+        if not raw:
+            warning = {
+                'Type': 11,
+                'Contents': 'File not found in Viper',
+                'ContentsFormat': formats['markdown']
+            }
+            demisto.results(warning)
+        else:
+            data = get_first(raw)
+
+            # Do string manipulation in url to navigate to web interface
+            analysis = '[Viper Database Entry](' + str(raw['links']['web']) + ')'
+
+
+            # Grab tag strings & format tag strings
+            pretty_tags = [tag['data']['tag'] for tag in raw['data']['tag_set']]
+
+            # Table of data to populate Viper.File
+            table = {
+                'Viper ID': raw['data']['id'],
+                'Created at': raw['data']['created_at'],
+                'SHA256': raw['data']['sha256'],
+                'SHA1': raw['data']['sha1'],
+                'MD5': raw['data']['md5'],
+                'ssdeep': raw['data']['ssdeep'],
+                'Link': analysis,
+                'Tags': pretty_tags
+            }
+
+            # Version of table for context data - no markdown formatting for url
+            cd_table = {
+                'Viper ID': raw['data']['id'],
+                'Created at': raw['data']['created_at'],
+                'SHA256': raw['data']['sha256'],
+                'SHA1': raw['data']['sha1'],
+                'MD5': raw['data']['md5'],
+                'ssdeep': raw['data']['ssdeep'],
+                'Link': raw['links']['web'],
+                'Tags': pretty_tags
+            }
+            hr = tableToMarkdown('Viper Search Results', table)
+
+
+            # If it's in Viper, it's bad - right?
+            # dbot score:
+            # 0 -> Unknown
+            # 1 -> Good
+            # 2 -> Suspicious
+            # 3 -> Bad, mmkay
+            dbot_score = 3
+            dbot_output = {
+                'Type': 'file',
+                'Indicator': hash_value,
+                'Vendor': 'Viper',
+                'Score': dbot_score
+            }
+
+            # Build indicator output for file entry context
+            file_output = {
+                hash_type.upper(): hash_value,
+                'ssdeep': raw['data']['ssdeep']
+            }
+
+            # If the dbot score is 3, the file is malicious
+            if dbot_score == 3:
+                file_output['Malicious'] = {
+                    'Vendor': 'Viper',
+                    'Description': pretty_tags
+                }
+
+            # Entry Context
+            ec = {
+                'DBotScore': dbot_output,
+                # This builds the 'Viper.File' context item - avoid duplicates with the value of the 'id' parameter
+                'Viper.File': createContext(cd_table, id=raw.get('id'), removeNull=True),
+                # Using DT selectors to prevent duplicate context entry data
+                'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
+            }
+
+            demisto.results({
+                'Type': entryTypes['note'],
+                'Contents': table,
+                'ContentsFormat': formats['json'],
+                'ReadableContentsFormat': formats['markdown'],
+                'HumanReadable': hr,
+                'EntryContext': ec
+            })
+
+    def viper_hash_search(hash_value):
+        url_fragment = 'project/default/malware/{}'.format(hash_value)
+        response = http_request('GET', url_fragment, None, None, None)
+        return response
+
+
+    def viper_upload_command():
+
+        # Get entry id, filename and filepath
+        file_entry = demisto.args().get('EntryID')
+        filename = demisto.getFilePath(file_entry)['name']
+        filepath = demisto.getFilePath(file_entry)['path']
+
+
+
+        #TODO: Path is same as file_entry, should be returning a file path, right?
+        #TODO: Fix 400 Bad Request
+
+        #demisto.results(file_entry)
+        demisto.results(filepath)  # Is the filepath actually a filepath?
+        demisto.results(filename)
+
+        # send file to Viper
+        response = viper_upload(filepath, filename)
+
+
+    def viper_upload(path, name):
+        url_fragment = 'project/default/malware/upload/'
+        try:
+            with open(path, 'rb') as viper_file:
+                upload = http_post(None, None, files={'file': viper_file})
+        except Exception as bad:
+            demisto.results(bad)
+            upload = False
+        return upload
+    ''' COMMANDS MANAGER / SWITCH PANEL '''
+
+    LOG('Command being called is %s' % (demisto.command()))
+
+    try:
+        if demisto.command() == 'test-module':
+            # This is the call made when pressing the integration test button.
+            test_module()
+        elif demisto.command() == 'file':
+            #  Collect SHA56 hash from demisto details
+            hash_value = demisto.args().get('file')
+            hash_type = get_hash_type(hash_value)
+
+            # Check if hash is SHA256 - Viper API only supports SHA256
+            if hash_type.lower() != 'sha256':
+                error = True
+            else:
+                error = False
+            if not error:
+                viper_search_command()
+            else:
+                warning = {
+                    'Type': 11,
+                    'Contents': 'Hash not recognized. Please use SHA256 hashes',
+                    'ContentsFormat': formats['markdown']
+                }
+                demisto.results(warning)
+        elif demisto.command() == 'upload':
+            viper_upload_command()
+
+    # Log exceptions
+    except Exception as e:
+        LOG(e.message)
+        LOG.print_log()
+        raise
   type: python
 image: data:image/png;base64,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

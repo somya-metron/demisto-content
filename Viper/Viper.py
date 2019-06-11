@@ -28,6 +28,13 @@ HEADERS = {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
 }
+
+POST_HEADERS = {
+    'Authorization': 'Token {}'.format(TOKEN),
+    'Content-Type': 'multipart/form-data',
+    'Accept': 'application/json'
+}
+
 # Remove proxy if not set to true in params
 if not demisto.params().get('proxy'):
     del os.environ['HTTP_PROXY']
@@ -57,6 +64,21 @@ def http_request(method, url_suffix, params=None, data=None, files=None):
         return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
     return res.json()
 
+def http_post(params=None, data=None, files=None):
+    # A wrapper for requests lib to send our requests and handle requests and responses better
+    res = requests.request(
+        url=BASE_URL + 'project/default/malware/upload/',
+        method='POST',
+        verify=USE_SSL,
+        params=params,
+        data=data,
+        headers=HEADERS,
+        files=files
+    )
+    # Handle error responses gracefully
+    if res.status_code not in {200}:
+        return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
+    return res.json()
 
 def get_first(iterable, default=None):
     """
@@ -201,6 +223,7 @@ def viper_upload_command():
     filepath = demisto.getFilePath(file_entry)['path']
 
 
+
     #TODO: Path is same as file_entry, should be returning a file path, right?
     #TODO: Fix 400 Bad Request
 
@@ -209,30 +232,18 @@ def viper_upload_command():
     demisto.results(filename)
 
     # send file to Viper
-    response = viper_upload(filename)
+    response = viper_upload(filepath, filename)
 
-'''
-    if response == 200:
-        demisto.results("File upload completed")
-    elif response == 403:
-        demisto.results("Error: API Key is incorrect")
-    else:
-        error_msg = response.json()['errors'][0]['message']
-        return_error(response.reason, error_msg)
-'''
 
-def viper_upload(path):
+def viper_upload(path, name):
     url_fragment = 'project/default/malware/upload/'
     try:
         with open(path, 'rb') as viper_file:
-            demisto.results(viper_file) # Test if URL is correct
-            upload = http_request('POST', url_fragment, None, None, files={'file': viper_file})
-    except Exception:
-        demisto.results("Error: Could not upload file")
-        return
+            upload = http_post(None, None, files={'file': viper_file})
+    except Exception as bad:
+        demisto.results(bad)
+        upload = False
     return upload
-
-
 ''' COMMANDS MANAGER / SWITCH PANEL '''
 
 LOG('Command being called is %s' % (demisto.command()))
