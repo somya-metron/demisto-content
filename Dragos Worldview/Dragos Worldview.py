@@ -1,12 +1,12 @@
-import demistomock as demisto
-from CommonServerPython import *
-from CommonServerUserPython import *
 ''' IMPORTS '''
 
-import json
+# import json
 import requests
-import re
-from distutils.util import strtobool
+# import re
+# from distutils.util import strtobool
+# import demistomock as demisto
+from CommonServerPython import *
+# from CommonServerUserPython import *
 
 # Disable insecure warnings
 requests.packages.urllib3.disable_warnings()
@@ -15,7 +15,7 @@ requests.packages.urllib3.disable_warnings()
 
 API_TOKEN = demisto.params().get('apitoken')
 API_SECRET = demisto.params().get('apisecret')
-TOKEN = demisto.params().get('token')
+
 # Remove trailing slash to prevent wrong URL path to service
 SERVER = demisto.params()['url'][:-1] \
     if (demisto.params()['url'] and demisto.params()['url'].endswith('/')) else demisto.params()['url']
@@ -121,6 +121,16 @@ def indicator_confidence_to_dbot_score(confidence):
 
 
 def create_standard_output(indicator):
+    """
+    The 'indicators' API endpoint returns standard data for each indicator type. This helper just returns those standard
+    key => values as a dictionary.
+
+    This data is output to the War Room.
+
+    :param indicator:
+    :return: Dragos indicator data
+    :rtype ``dict``
+    """
     standard_output = {
         'Value': indicator.get('value'),
         'ActivityGroups': indicator.get('activity_groups'),
@@ -139,6 +149,15 @@ def create_standard_output(indicator):
 
 
 def create_dbot_output(indicator, indicator_type, score):
+    """
+    Helper to generate DBot score dictionary for incident context.
+
+    :param indicator: The actual value of the indicator
+    :param indicator_type: The type of indicator
+    :param score: The DBot score (0-3)
+    :return: Demisto context data for DBot
+    :rtype: ``dict``
+    """
     dbot_output = {
         'Type': indicator_type,
         'Indicator': indicator,
@@ -153,7 +172,7 @@ def create_dbot_output(indicator, indicator_type, score):
 
 def test_module():
     """
-    Performs basic get request to get item samples
+    Performs basic get request to validate integration configuration.
     """
     response = http_request('GET', 'products', {"page_size": 1})
     if 'total' not in response or 'error' in response:
@@ -163,21 +182,40 @@ def test_module():
 
 
 def indicator_search_command():
-    # Command switcher
+    """
+    Business logic for searching indicators of all types.
+
+    Searches Dragos API for information regarding an indicator, formats the various outputs for Demisto (incident
+    context, DBot score, war room markdown and indicator enrichment), and returns those results to the Demisto engine.
+
+    :return: Demisto results
+    """
+
+    # Demisto arguments for commands like file, ip, domain, are the same as the command name (e.g. !file file=<hash>).
+    # The behavior is utilized here to retrieve the value of the indicator the user wishes to search for, and also to
+    # set the initial type of indicator.
     indicator = demisto.args().get(demisto.command())
     indicator_type = demisto.command().lower()
     indicator_output = {}
     context_sub = 'Dragos.{}'.format(demisto.command())
 
     if demisto.command().lower() == 'file':
+        # Indicator type for FILE is the type of hash
         indicator_type = get_hash_type(indicator)
         indicator_output[indicator_type.upper()] = indicator
-        indicator_dt = 'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)'
+
+        # DT selector to avoid duplicating data in Demisto context (file)
+        indicator_dt = ('File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || '
+                        'val.SHA256 && val.SHA256 == obj.SHA256)')
     elif demisto.command().lower() == 'ip':
         indicator_output['Address'] = indicator
+
+        # DT selector to avoid duplicating data in Demisto context (IP)
         indicator_dt = 'IP(val.Address && val.Address == obj.Address)'
     elif demisto.command().lower() == 'domain':
         indicator_output['Name'] = indicator
+
+        # DT selector to avoid duplicating data in Demisto context (domain)
         indicator_dt = 'Domain(val.Name && val.Name == obj.Name)'
 
     raw = indicator_search(indicator=indicator, indicator_type=indicator_type)
@@ -212,6 +250,7 @@ def indicator_search_command():
         indicator_dt: indicator_output
     }
 
+    # Output the sweet, sweet, results
     demisto.results({
         'Type': entryTypes['note'],
         'Contents': war_room_table,
@@ -222,7 +261,15 @@ def indicator_search_command():
     })
 
 
+@logger
 def indicator_search(indicator, indicator_type):
+    """
+    Helper function, following Demisto best practice. Handles submitting request to API endpoints
+
+    :param indicator: The actual value of the indicator (file hash, ip address, domain name)
+    :param indicator_type: The type of indicator being search
+    :return: JSON
+    """
     params = {"type": indicator_type, "value": indicator}
     response = http_request('GET', 'indicators', params, None)
     return response
