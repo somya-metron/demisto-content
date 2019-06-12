@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project version="4">
-  <component name="DemistoSetupConfig">
-    <option name="serverURL" value="https://192.168.1.125" />
-    <option name="trustAnyCertificate" value="true" />
-    <option name="trackLocalChanges" value="true" />
-  </component>
-</project>
