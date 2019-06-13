@@ -2,11 +2,14 @@ import demistomock as demisto
 from CommonServerPython import *
 from CommonServerUserPython import *
 ''' IMPORTS '''
-import shutil
 import json
 import re
 import requests
 import os
+import shlex
+import mimetypes
+import subprocess
+from datetime import date
 from distutils.util import strtobool
 
 # Disable insecure warnings
@@ -31,8 +34,8 @@ HEADERS = {
 
 POST_HEADERS = {
     'Authorization': 'Token {}'.format(TOKEN),
-    'Content-Type': 'multipart/form-data',
     'Accept': 'application/json'
+    # Exclude Content-Type as "requests" call must set boundary value used to delineate the parts in the POST body
 }
 
 # Remove proxy if not set to true in params
@@ -64,6 +67,7 @@ def http_request(method, url_suffix, params=None, data=None, files=None):
         return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
     return res.json()
 
+
 def http_post(params=None, data=None, files=None):
     # A wrapper for requests lib to send our requests and handle requests and responses better
     res = requests.request(
@@ -72,12 +76,19 @@ def http_post(params=None, data=None, files=None):
         verify=USE_SSL,
         params=params,
         data=data,
-        headers=HEADERS,
+        headers=POST_HEADERS,
         files=files
     )
     # Handle error responses gracefully
-    if res.status_code not in {200}:
-        return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
+    if res.status_code not in {201}:
+        warning = {
+            'Type': 11,
+            'Contents': 'Upload unsuccessful or file already exists',
+            'ContentsFormat': formats['markdown']
+        }
+        demisto.results(warning)
+    else:
+        demisto.results("Upload success!")
     return res.json()
 
 def get_first(iterable, default=None):
@@ -222,28 +233,24 @@ def viper_upload_command():
     filename = demisto.getFilePath(file_entry)['name']
     filepath = demisto.getFilePath(file_entry)['path']
 
-
-
-    #TODO: Path is same as file_entry, should be returning a file path, right?
-    #TODO: Fix 400 Bad Request
-
-    #demisto.results(file_entry)
-    demisto.results(filepath)  # Is the filepath actually a filepath?
-    demisto.results(filename)
-
     # send file to Viper
-    response = viper_upload(filepath, filename)
+    response = viper_upload(filepath, filename, file_entry.lower())
 
 
-def viper_upload(path, name):
-    url_fragment = 'project/default/malware/upload/'
-    try:
-        with open(path, 'rb') as viper_file:
-            upload = http_post(None, None, files={'file': viper_file})
-    except Exception as bad:
-        demisto.results(bad)
-        upload = False
+def viper_upload(path, name, entry_id):
+
+    # get absolute filepath for upload
+    new_path = os.path.abspath(path)
+    files = {'file': (name, open(new_path, 'rb'))}
+    incident_name = demisto.get(demisto.investigation(), 'name')
+
+
+    # create some basic demisto-related tags to attach to file details on initial upload
+    data = {'tag_list': entry_id + ',' + str(date.today()) + ',' + 'demisto' + ',' + incident_name}
+    upload = http_post(None, data=data, files=files)
     return upload
+
+
 ''' COMMANDS MANAGER / SWITCH PANEL '''
 
 LOG('Command being called is %s' % (demisto.command()))
