@@ -1,12 +1,12 @@
-import demistomock as demisto
-from CommonServerPython import *
-from CommonServerUserPython import *
 ''' IMPORTS '''
 
-import json
+# import json
 import requests
-import re
-from distutils.util import strtobool
+# import re
+# from distutils.util import strtobool
+# import demistomock as demisto
+from CommonServerPython import *
+# from CommonServerUserPython import *
 
 # Disable insecure warnings
 requests.packages.urllib3.disable_warnings()
@@ -15,7 +15,7 @@ requests.packages.urllib3.disable_warnings()
 
 API_TOKEN = demisto.params().get('apitoken')
 API_SECRET = demisto.params().get('apisecret')
-TOKEN = demisto.params().get('token')
+
 # Remove trailing slash to prevent wrong URL path to service
 SERVER = demisto.params()['url'][:-1] \
     if (demisto.params()['url'] and demisto.params()['url'].endswith('/')) else demisto.params()['url']
@@ -121,6 +121,16 @@ def indicator_confidence_to_dbot_score(confidence):
 
 
 def create_standard_output(indicator):
+    """
+    The 'indicators' API endpoint returns standard data for each indicator type. This helper just returns those standard
+    key => values as a dictionary.
+
+    This data is output to the War Room.
+
+    :param indicator:
+    :return: Dragos indicator data
+    :rtype ``dict``
+    """
     standard_output = {
         'Value': indicator.get('value'),
         'ActivityGroups': indicator.get('activity_groups'),
@@ -138,9 +148,18 @@ def create_standard_output(indicator):
     return standard_output
 
 
-def create_dbot_output(indicator, score):
+def create_dbot_output(indicator, indicator_type, score):
+    """
+    Helper to generate DBot score dictionary for incident context.
+
+    :param indicator: The actual value of the indicator
+    :param indicator_type: The type of indicator
+    :param score: The DBot score (0-3)
+    :return: Demisto context data for DBot
+    :rtype: ``dict``
+    """
     dbot_output = {
-        'Type': 'file',
+        'Type': indicator_type,
         'Indicator': indicator,
         'Vendor': 'Dragos Worldview',
         'Score': score
@@ -153,7 +172,7 @@ def create_dbot_output(indicator, score):
 
 def test_module():
     """
-    Performs basic get request to get item samples
+    Performs basic get request to validate integration configuration.
     """
     response = http_request('GET', 'products', {"page_size": 1})
     if 'total' not in response or 'error' in response:
@@ -162,43 +181,62 @@ def test_module():
         demisto.results('ok')
 
 
-def file_search_command():
+def indicator_search_command():
     """
-    Retrieves information for a given file hash from Dragos WorldView's REST API.
+    Business logic for searching indicators of all types.
 
-    :return: ``dict``
+    Searches Dragos API for information regarding an indicator, formats the various outputs for Demisto (incident
+    context, DBot score, war room markdown and indicator enrichment), and returns those results to the Demisto engine.
+
+    :return: Demisto results
     """
-    hash_value = demisto.args().get('file')
-    hash_type = get_hash_type(hash_value)
 
-    # API only supports md5, sha1, sha256 hashes.
-    if hash_type.lower() not in {'md5', 'sha1', 'sha256'}:
-        e_msg = 'Hash type supplied is not supported. Only MD5, SHA1, or SHA256 hashes are supported.'
-        return_error(e_msg)
+    # Demisto arguments for commands like file, ip, domain, are the same as the command name (e.g. !file file=<hash>).
+    # The behavior is utilized here to retrieve the value of the indicator the user wishes to search for, and also to
+    # set the initial type of indicator.
+    indicator = demisto.args().get(demisto.command())
+    indicator_type = demisto.command().lower()
+    indicator_output = {}
+    context_sub = 'Dragos.{}'.format(demisto.command())
 
-    raw = file_search(hash_type, hash_value)
+    if demisto.command().lower() == 'file':
+        # Indicator type for FILE is the type of hash
+        indicator_type = get_hash_type(indicator)
+        indicator_output[indicator_type.upper()] = indicator
+
+        # DT selector to avoid duplicating data in Demisto context (file)
+        indicator_dt = ('File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || '
+                        'val.SHA256 && val.SHA256 == obj.SHA256)')
+    elif demisto.command().lower() == 'ip':
+        indicator_output['Address'] = indicator
+
+        # DT selector to avoid duplicating data in Demisto context (IP)
+        indicator_dt = 'IP(val.Address && val.Address == obj.Address)'
+    elif demisto.command().lower() == 'domain':
+        indicator_output['Name'] = indicator
+
+        # DT selector to avoid duplicating data in Demisto context (domain)
+        indicator_dt = 'Domain(val.Name && val.Name == obj.Name)'
+
+    raw = indicator_search(indicator=indicator, indicator_type=indicator_type)
+
     if 'total' not in raw:
-        return_error('Error retrieving results for indicator [{}]'.format(hash_value))
+        return_error('Error retrieving results for indicator [{}]'.format(indicator))
     elif raw['total'] == 0:
-        demisto.results('Dragos has no information about indicator {}'.format(hash_value))
+        demisto.results('Dragos has no information about indicator [{}]'.format(indicator))
         return 0
-    response = get_first(raw_response['indicators'])
 
+    response = get_first(raw['indicators'])
     dbot_score = indicator_confidence_to_dbot_score(response.get('confidence'))
-    dbot_output = create_dbot_output(hash_value, dbot_score)
+    dbot_output = create_dbot_output(indicator, indicator_type, dbot_score)
     war_room_table = create_standard_output(response)
     war_room_table['UUID'] = response.get('uuid')
-    hr_title = 'Dragos WorldView - {}'.format(hash_value)
+    hr_title = 'Dragos WorldView - {}'.format(indicator)
     hr = tableToMarkdown(hr_title, war_room_table)
 
-    # Build indicator output for file entry context
-    file_output = {
-        hash_type.upper(): hash_value
-    }
-
-    # If the dbot score is 3, the file is malicious
+    # If the dbot score is 3, the indicator is malicious
     if dbot_score == 3:
-        file_output['Malicious'] = {
+        indicator_output['Malicious'] = {
             'Vendor': 'Dragos Worldview',
             'Description': 'Confidence: {} Comment: {}'.format(response.get('confidence'), response.get('comment'))
         }
@@ -206,12 +244,13 @@ def file_search_command():
     # Create the entry context
     ec = {
         'DBotScore': dbot_output,
-        'Dragos.File': createContext(war_room_table, id=response.get('uuid'), removeNull=True),
+        context_sub: createContext(war_room_table, id=response.get('uuid'), removeNull=True),
 
         # Using DT selectors to prevent duplicate context entry data
-        'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256)': file_output
+        indicator_dt: indicator_output
     }
 
+    # Output the sweet, sweet, results
     demisto.results({
         'Type': entryTypes['note'],
         'Contents': war_room_table,
@@ -222,50 +261,19 @@ def file_search_command():
     })
 
 
-def file_search(hash_value, hash_type):
+@logger
+def indicator_search(indicator, indicator_type):
     """
-    Queries the REST API and passes results to file_search_command
+    Helper function, following Demisto best practice. Handles submitting request to API endpoints
 
-    :type hash_value: ``str``
-    :param hash_value:  File hash to be checked
-
-    :type hash_type: ``str``
-    :param hash_type:  The type of hash being retrieved (MD5, SHA1, SHA256)
-
-    :return: JSON-ified HTTP Response from REST API
-    :rtype: ``json``
+    :param indicator: The actual value of the indicator (file hash, ip address, domain name)
+    :param indicator_type: The type of indicator being search
+    :return: JSON
     """
-    params = {"type": hash_type, "value": hash_value}
-    response = http_request('GET', 'indicators', params)
-    return response
-
-
-def ip_search_command():
-    """
-    Retrieves information for a given IP address from Dragos WorldView's REST API.
-
-    :return: ``dict``
-    """
-    ip_address = demisto.args().get('ip')
-
-    raw_response = ip_search(ip_address)
-    if 'total' not in raw_response:
-        return_error('Error retrieving results for indicator [{}]'.format(ip_address))
-    elif raw_response['total'] == 0:
-        demisto.results('Dragos has no information about indicator [{}]'.format(ip_address))
-        return 0
-    response = get_first(raw_response['indicators'])
-
-
-
-
-
-
-
-def ip_search(ip_address):
-    params = {"type": "ip", "value": ip_address}
+    params = {"type": indicator_type, "value": indicator}
     response = http_request('GET', 'indicators', params, None)
     return response
+
 
 ''' COMMANDS MANAGER / SWITCH PANEL '''
 
@@ -277,11 +285,8 @@ try:
     if command == 'test-module':
         # This is the call made when pressing the integration test button.
         test_module()
-    elif command == 'file':
-        # An example command
-        file_search_command()
-    elif command == 'ip':
-        ip_search_command()
+    else:
+        indicator_search_command()
 
 # Log exceptions
 except Exception as e:
