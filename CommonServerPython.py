@@ -1,4 +1,5 @@
 import demistomock as demisto
+
 # Common functions script
 # =======================
 # This script will be appended to each server script before being executed.
@@ -6,7 +7,6 @@ import demistomock as demisto
 from datetime import datetime, timedelta
 import time
 import json
-import optparse
 import sys
 import os
 import re
@@ -15,19 +15,87 @@ from collections import OrderedDict
 import xml.etree.cElementTree as ET
 
 IS_PY3 = sys.version_info[0] == 3
-STRING_TYPES = (str, bytes) if IS_PY3 else (str, unicode)
+# pylint: disable=undefined-variable
+if IS_PY3:
+    STRING_TYPES = (str, bytes)  # type: ignore
+    STRING_OBJ_TYPES = (str, )
+else:
+    STRING_TYPES = (str, unicode)  # type: ignore
+    STRING_OBJ_TYPES = STRING_TYPES  # type: ignore
+# pylint: enable=undefined-variable
 
-entryTypes = {'note': 1, 'downloadAgent': 2, 'file': 3, 'error': 4, 'pinned': 5, 'userManagement': 6, 'image': 7, 'plagroundError': 8, 'entryInfoFile': 9, 'map': 15}
-formats = {'html': 'html', 'table': 'table', 'json': 'json', 'text': 'text', 'dbotResponse': 'dbotCommandResponse', 'markdown': 'markdown'}
-brands = {'xfe': 'xfe', 'vt': 'virustotal', 'wf': 'WildFire', 'cy': 'cylance', 'cs': 'crowdstrike-intel'}
-providers = {'xfe': 'IBM X-Force Exchange', 'vt': 'VirusTotal', 'wf': 'WildFire', 'cy': 'Cylance', 'cs': 'CrowdStrike'}
-thresholds = {'xfeScore': 4, 'vtPositives': 10, 'vtPositiveUrlsForIP': 30}
-dbotscores = {'Critical': 4, 'High': 3, 'Medium': 2,'Low': 1, 'Unknown': 0, 'Informational': 0.5}
+entryTypes = {
+    'note': 1,
+    'downloadAgent': 2,
+    'file': 3,
+    'error': 4,
+    'pinned': 5,
+    'userManagement': 6,
+    'image': 7,
+    'plagroundError': 8,
+    'playgroundError': 8,
+    'entryInfoFile': 9,
+    'map': 15,
+    'widget': 17
+}
+formats = {
+    'html': 'html',
+    'table': 'table',
+    'json': 'json',
+    'text': 'text',
+    'dbotResponse': 'dbotCommandResponse',
+    'markdown': 'markdown'
+}
+brands = {
+    'xfe': 'xfe',
+    'vt': 'virustotal',
+    'wf': 'WildFire',
+    'cy': 'cylance',
+    'cs': 'crowdstrike-intel'
+}
+providers = {
+    'xfe': 'IBM X-Force Exchange',
+    'vt': 'VirusTotal',
+    'wf': 'WildFire',
+    'cy': 'Cylance',
+    'cs': 'CrowdStrike'
+}
+thresholds = {
+    'xfeScore': 4,
+    'vtPositives': 10,
+    'vtPositiveUrlsForIP': 30
+}
+dbotscores = {
+    'Critical': 4,
+    'High': 3,
+    'Medium': 2,
+    'Low': 1,
+    'Unknown': 0,
+    'Informational': 0.5
+}
+
+
+###### Fix fetching credentials from vault instances ######
+# ====================================================================================
+try:
+    for k, v in demisto.params().items():
+        if isinstance(v, dict):
+            if 'credentials' in v:
+                vault = v['credentials'].get('vaultInstanceId')
+                if vault:
+                    v['identifier'] = v['credentials'].get('user')
+                break
+
+except Exception:
+    pass
+
+# ====================================================================================
+
 
 def handle_proxy(proxy_param_name='proxy', checkbox_default_value=False):
     """
         Handle logic for routing traffic through the system proxy.
-         Should usually be called at the beginning of the integration, depending on proxy checkbox state.
+        Should usually be called at the beginning of the integration, depending on proxy checkbox state.
 
         :type proxy_param_name: ``string``
         :param proxy_param_name: name of the "use system proxy" integration parameter
@@ -38,7 +106,7 @@ def handle_proxy(proxy_param_name='proxy', checkbox_default_value=False):
         :rtype: ``dict``
         :return: proxies dict for the 'proxies' parameter of 'requests' functions
     """
-    proxies = {}
+    proxies = {}  # type: dict
     if demisto.params().get(proxy_param_name, checkbox_default_value):
         proxies = {
             'http': os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy', ''),
@@ -49,6 +117,7 @@ def handle_proxy(proxy_param_name='proxy', checkbox_default_value=False):
             if k in os.environ:
                 del os.environ[k]
     return proxies
+
 
 def urljoin(url, suffix=""):
     """
@@ -113,7 +182,8 @@ def positiveFile(entry):
        :rtype: ``bool``
     """
     if entry['Type'] != entryTypes['error'] and entry['ContentsFormat'] == formats['json']:
-        if entry['Brand'] == brands['xfe'] and (demisto.get(entry, 'Contents.malware.family') or demisto.gets(entry, 'Contents.malware.origins.external.family')):
+        if entry['Brand'] == brands['xfe'] and (demisto.get(entry, 'Contents.malware.family')
+                                                or demisto.gets(entry, 'Contents.malware.origins.external.family')):
             return True
         if entry['Brand'] == brands['vt']:
             return demisto.get(entry, 'Contents.positives') > thresholds['vtPositives']
@@ -186,37 +256,6 @@ def formatEpochDate(t):
     return ''
 
 
-def compareDates(date1, date2, dateFormat):
-    """
-       Compares two dates and returns the delta.
-       If instead of date passed string 'now' then it will be compared to current time.
-       Date format must be according to python date formats: https://docs.python.org/2/library/datetime.html
-
-       :type date1: ``int`` or ``str``
-       :param date1: First date to be compared (required)
-
-       :type date2: ``int`` or ``str``
-       :param date2: Second date tobe compared (required)
-
-       :return: The delta of the two dates
-       :rtype: ``int``
-    """
-    first = None
-    if date1 == 'now':
-        first = datetime.now(tzlocal())
-    elif isinstance(date1, STRING_TYPES):
-        first = parse(date1)
-
-    second = None
-    if date2 == 'now':
-        second = datetime.now(tzlocal())
-    elif isinstance(date2, STRING_TYPES):
-        second = parse(date2)
-    delta = first - second
-
-    return delta
-
-
 def shortCrowdStrike(entry):
     """
        Display CrowdStrike Intel results in Markdown (deprecated)
@@ -238,14 +277,20 @@ def shortCrowdStrike(entry):
                 csRes += '\nName|Created|Last Valid'
                 csRes += '\n----|-------|----------'
                 for label in labels:
-                    csRes += '\n' + demisto.gets(label, 'name') + '|' + formatEpochDate(demisto.get(label, 'created_on')) + '|' + formatEpochDate(demisto.get(label, 'last_valid_on'))
+                    csRes += '\n' + demisto.gets(label, 'name') + '|' +\
+                             formatEpochDate(demisto.get(label, 'created_on')) + '|' + \
+                             formatEpochDate(demisto.get(label, 'last_valid_on'))
+
             relations = demisto.get(c, 'relations')
             if relations:
                 csRes += '\n### Relations'
                 csRes += '\nIndicator|Type|Created|Last Valid'
                 csRes += '\n---------|----|-------|----------'
                 for r in relations:
-                    csRes += '\n' + demisto.gets(r, 'indicator') + '|' + demisto.gets(r, 'type') + '|' + formatEpochDate(demisto.get(label, 'created_date')) + '|' + formatEpochDate(demisto.get(label, 'last_valid_date'))
+                    csRes += '\n' + demisto.gets(r, 'indicator') + '|' + demisto.gets(r, 'type') + '|' + \
+                             formatEpochDate(demisto.get(label, 'created_date')) + '|' + \
+                             formatEpochDate(demisto.get(label, 'last_valid_date'))
+
             return {'ContentsFormat': formats['markdown'], 'Type': entryTypes['note'], 'Contents': csRes}
     return entry
 
@@ -267,7 +312,8 @@ def shortUrl(entry):
                 'Country': c['country'], 'MalwareCount': demisto.get(c, 'malware.count'),
                 'A': demisto.gets(c, 'resolution.A'), 'AAAA': demisto.gets(c, 'resolution.AAAA'),
                 'Score': demisto.get(c, 'url.result.score'), 'Categories': demisto.gets(c, 'url.result.cats'),
-                'URL': demisto.get(c, 'url.result.url'), 'Provider': providers['xfe'], 'ProviderLink': 'https://exchange.xforce.ibmcloud.com/url/' + demisto.get(c, 'url.result.url')}}
+                'URL': demisto.get(c, 'url.result.url'), 'Provider': providers['xfe'],
+                'ProviderLink': 'https://exchange.xforce.ibmcloud.com/url/' + demisto.get(c, 'url.result.url')}}
         if entry['Brand'] == brands['vt']:
             return {'ContentsFormat': formats['table'], 'Type': entryTypes['note'], 'Contents': {
                 'ScanDate': c['scan_date'], 'Positives': c['positives'], 'Total': c['total'],
@@ -293,18 +339,23 @@ def shortFile(entry):
             cm = c['malware']
             return {'ContentsFormat': formats['table'], 'Type': entryTypes['note'], 'Contents': {
                 'Family': cm['family'], 'MIMEType': cm['mimetype'], 'MD5': cm['md5'][2:] if 'md5' in cm else '',
-                'CnCServers': demisto.get(cm, 'origins.CncServers.count'), 'DownloadServers': demisto.get(cm, 'origins.downloadServers.count'),
-                'Emails': demisto.get(cm, 'origins.emails.count'), 'ExternalFamily': demisto.gets(cm, 'origins.external.family'),
-                'ExternalCoverage': demisto.get(cm, 'origins.external.detectionCoverage'), 'Provider': providers['xfe'],
+                'CnCServers': demisto.get(cm, 'origins.CncServers.count'),
+                'DownloadServers': demisto.get(cm, 'origins.downloadServers.count'),
+                'Emails': demisto.get(cm, 'origins.emails.count'),
+                'ExternalFamily': demisto.gets(cm, 'origins.external.family'),
+                'ExternalCoverage': demisto.get(cm, 'origins.external.detectionCoverage'),
+                'Provider': providers['xfe'],
                 'ProviderLink': 'https://exchange.xforce.ibmcloud.com/malware/' + cm['md5'].replace('0x', '')}}
         if entry['Brand'] == brands['vt']:
             return {'ContentsFormat': formats['table'], 'Type': entryTypes['note'], 'Contents': {
                 'Resource': c['resource'], 'ScanDate': c['scan_date'], 'Positives': c['positives'],
-                'Total': c['total'], 'SHA1': c['sha1'], 'SHA256': c['sha256'], 'Provider': providers['vt'], 'ProviderLink': c['permalink']}}
+                'Total': c['total'], 'SHA1': c['sha1'], 'SHA256': c['sha256'], 'Provider': providers['vt'],
+                'ProviderLink': c['permalink']}}
         if entry['Brand'] == brands['wf']:
             c = demisto.get(entry, 'Contents.wildfire.file_info')
             if c:
-                return {'Contents': {'Type': c['filetype'], 'Malware': c['malware'], 'MD5': c['md5'], 'SHA256': c['sha256'], 'Size': c['size'], 'Provider': providers['wf']},
+                return {'Contents': {'Type': c['filetype'], 'Malware': c['malware'], 'MD5': c['md5'],
+                                     'SHA256': c['sha256'], 'Size': c['size'], 'Provider': providers['wf']},
                         'ContentsFormat': formats['table'], 'Type': entryTypes['note']}
         if entry['Brand'] == brands['cy'] and demisto.get(entry, 'Contents'):
             contents = demisto.get(entry, 'Contents')
@@ -312,11 +363,14 @@ def shortFile(entry):
             if k and len(k) > 0:
                 v = contents[k[0]]
                 if v and demisto.get(v, 'generalscore'):
-                    return {'Contents': {'Status': v['status'], 'Code': v['statuscode'], 'Score': v['generalscore'], 'Classifiers': str(v['classifiers']), 'ConfirmCode': v['confirmcode'], 'Error': v['error'], 'Provider': providers['cy']},
+                    return {'Contents': {'Status': v['status'], 'Code': v['statuscode'], 'Score': v['generalscore'],
+                                         'Classifiers': str(v['classifiers']), 'ConfirmCode': v['confirmcode'],
+                                         'Error': v['error'], 'Provider': providers['cy']},
                             'ContentsFormat': formats['table'], 'Type': entryTypes['note']}
         if entry['Brand'] == brands['cs'] and demisto.get(entry, 'Contents'):
             return shortCrowdStrike(entry)
-    return {'ContentsFormat': formats['text'], 'Type': entryTypes['error'], 'Contents': 'Unknown provider for result: ' + entry['Brand']}
+    return {'ContentsFormat': formats['text'], 'Type': entryTypes['error'],
+            'Contents': 'Unknown provider for result: ' + entry['Brand']}
 
 
 def shortIp(entry):
@@ -337,10 +391,12 @@ def shortIp(entry):
                 'IP': cr['ip'], 'Score': cr['score'], 'Geo': str(cr['geo']), 'Categories': str(cr['cats']),
                 'Provider': providers['xfe']}}
         if entry['Brand'] == brands['vt']:
-            return {'ContentsFormat': formats['table'], 'Type': entryTypes['note'], 'Contents': {'Positive URLs': vtCountPositives(entry), 'Provider': providers['vt']}}
+            return {'ContentsFormat': formats['table'], 'Type': entryTypes['note'],
+                    'Contents': {'Positive URLs': vtCountPositives(entry), 'Provider': providers['vt']}}
         if entry['Brand'] == brands['cs'] and demisto.get(entry, 'Contents'):
             return shortCrowdStrike(entry)
-    return {'ContentsFormat': formats['text'], 'Type': entryTypes['error'], 'Contents': 'Unknown provider for result: ' + entry['Brand']}
+    return {'ContentsFormat': formats['text'], 'Type': entryTypes['error'],
+            'Contents': 'Unknown provider for result: ' + entry['Brand']}
 
 
 def shortDomain(entry):
@@ -355,8 +411,10 @@ def shortDomain(entry):
     """
     if entry['Type'] != entryTypes['error'] and entry['ContentsFormat'] == formats['json']:
         if entry['Brand'] == brands['vt']:
-            return {'ContentsFormat': formats['table'], 'Type': entryTypes['note'], 'Contents': {'Positive URLs': vtCountPositives(entry), 'Provider': providers['vt']}}
-    return {'ContentsFormat': formats['text'], 'Type': entryTypes['error'], 'Contents': 'Unknown provider for result: ' + entry['Brand']}
+            return {'ContentsFormat': formats['table'], 'Type': entryTypes['note'],
+                    'Contents': {'Positive URLs': vtCountPositives(entry), 'Provider': providers['vt']}}
+    return {'ContentsFormat': formats['text'], 'Type': entryTypes['error'],
+            'Contents': 'Unknown provider for result: ' + entry['Brand']}
 
 
 def get_error(execute_command_result):
@@ -421,7 +479,7 @@ def FormatADTimestamp(ts):
        :return: A string represeting the time
        :rtype: ``str``
     """
-    return ( datetime(year=1601, month=1, day=1) + timedelta(seconds = int(ts)/10**7) ).ctime()
+    return (datetime(year=1601, month=1, day=1) + timedelta(seconds=int(ts) / 10**7)).ctime()
 
 
 def PrettifyCompactedTimestamp(x):
@@ -448,12 +506,12 @@ def NormalizeRegistryPath(strRegistryPath):
        :rtype: ``str``
     """
     dSub = {
-        'HKCR' : 'HKEY_CLASSES_ROOT',
-        'HKCU' : 'HKEY_CURRENT_USER',
-        'HKLM' : 'HKEY_LOCAL_MACHINE',
-        'HKU' : 'HKEY_USERS',
-        'HKCC' : 'HKEY_CURRENT_CONFIG',
-        'HKPD' : 'HKEY_PERFORMANCE_DATA'
+        'HKCR': 'HKEY_CLASSES_ROOT',
+        'HKCU': 'HKEY_CURRENT_USER',
+        'HKLM': 'HKEY_LOCAL_MACHINE',
+        'HKU': 'HKEY_USERS',
+        'HKCC': 'HKEY_CURRENT_CONFIG',
+        'HKPD': 'HKEY_PERFORMANCE_DATA'
     }
     for k in dSub:
         if strRegistryPath[:len(k)] == k:
@@ -473,12 +531,12 @@ def scoreToReputation(score):
        :rtype: ``str``
     """
     to_str = {
-        4 : 'Critical',
-        3 : 'Bad',
-        2 : 'Suspicious',
-        1 : 'Good',
-        0.5 : 'Informational',
-        0 : 'Unknown'
+        4: 'Critical',
+        3: 'Bad',
+        2: 'Suspicious',
+        1: 'Good',
+        0.5: 'Informational',
+        0: 'Unknown'
     }
     return to_str.get(score, 'None')
 
@@ -496,12 +554,10 @@ class IntegrationLogger(object):
       :rtype: ``None``
     """
     def __init__(self, ):
-        self.messages = []
-
+        self.messages = []  # type: list
 
     def __call__(self, message):
         self.messages.append('%s' % (message, ))
-
 
     def print_log(self, verbose=False):
         if self.messages:
@@ -567,7 +623,6 @@ def formatCell(data, is_pretty=True):
        :return: The formatted cell content as a string
        :rtype: ``str``
     """
-    l_format = '\n' if is_pretty else ''
     if isinstance(data, STRING_TYPES):
         return data
     elif isinstance(data, dict):
@@ -659,7 +714,7 @@ def appendContext(key, data, dedup=False):
        :rtype: ``None``
     """
     if data is None:
-      return
+        return
     existing = demisto.get(demisto.context(), key)
     if existing:
         strBased = isinstance(data, STRING_TYPES) and isinstance(existing, STRING_TYPES)
@@ -687,7 +742,8 @@ def tableToMarkdown(name, t, headers=None, headerTransform=None, removeNull=Fals
        :param t: The JSON table - List of dictionaries with the same keys or a single dictionary (required)
 
        :type headers: ``list`` or ``string``
-       :keyword headers: A list of headers to be presented in the output table (by order). If string will be passed then table will have single header. Default will include all available headers.
+       :keyword headers: A list of headers to be presented in the output table (by order). If string will be passed
+            then table will have single header. Default will include all available headers.
 
        :type headerTransform: ``function``
        :keyword headerTransform: A function that formats the original data headers (optional)
@@ -740,8 +796,8 @@ def tableToMarkdown(name, t, headers=None, headerTransform=None, removeNull=Fals
 
     if t and len(headers) > 0:
         newHeaders = []
-        if headerTransform is None:
-            headerTransform = lambda s: s
+        if headerTransform is None:  # noqa
+            headerTransform = lambda s: s  # noqa
         for header in headers:
             newHeaders.append(headerTransform(header))
         mdResult += '|'
@@ -753,7 +809,8 @@ def tableToMarkdown(name, t, headers=None, headerTransform=None, removeNull=Fals
         sep = '---'
         mdResult += '|' + '|'.join([sep] * len(headers)) + '|\n'
         for entry in t:
-            vals = [stringEscapeMD((formatCell(entry.get(h, ''), False) if entry.get(h) is not None else ''), True, True) for h in headers]
+            vals = [stringEscapeMD((formatCell(entry.get(h, ''), False) if entry.get(h) is not None else ''),
+                                   True, True) for h in headers]
             mdResult += '|'
             if len(vals) == 1:
                 mdResult += vals[0]
@@ -789,9 +846,9 @@ def createContextSingle(obj, id=None, keyTransform=None, removeNull=False):
         :return: The converted context list
         :rtype: ``list``
     """
-    res = {}
+    res = {}  # type: dict
     if keyTransform is None:
-        keyTransform = lambda s: s
+        keyTransform = lambda s: s  # noqa
     keys = obj.keys()
     for key in keys:
         if removeNull and obj[key] in ('', None, [], {}):
@@ -875,28 +932,29 @@ def fileResult(filename, data, file_type=None):
     if file_type is None:
         file_type = entryTypes['file']
     temp = demisto.uniqueFile()
-    with open(demisto.investigation()['id'] + '_' + temp,'wb') as f:
+    with open(demisto.investigation()['id'] + '_' + temp, 'wb') as f:
         f.write(data)
     return {'Contents': '', 'ContentsFormat': formats['text'], 'Type': file_type, 'File': filename, 'FileID': temp}
 
 
 def hash_djb2(s, seed=5381):
-  """
-   Hash string with djb2 hash function
+    """
+     Hash string with djb2 hash function
 
-   :type s: ``str``
-   :param s: The input string to hash
+     :type s: ``str``
+     :param s: The input string to hash
 
-   :type seed: ``int``
-   :param seed: The seed for the hash function (default is 5381)
+     :type seed: ``int``
+     :param seed: The seed for the hash function (default is 5381)
 
-   :return: The hashed value
-   :rtype: ``int``
-  """
-  hash = seed
-  for x in s:
-      hash = (( hash << 5) + hash) + ord(x)
-  return hash & 0xFFFFFFFF
+     :return: The hashed value
+     :rtype: ``int``
+    """
+    hash = seed
+    for x in s:
+        hash = ((hash << 5) + hash) + ord(x)
+
+    return hash & 0xFFFFFFFF
 
 
 def file_result_existing_file(filename, saveFilename=None):
@@ -915,7 +973,7 @@ def file_result_existing_file(filename, saveFilename=None):
     temp = demisto.uniqueFile()
     os.rename(filename, demisto.investigation()['id'] + '_' + temp)
     return {'Contents': '', 'ContentsFormat': formats['text'], 'Type': entryTypes['file'],
-        'File': saveFilename if saveFilename else filename, 'FileID': temp}
+            'File': saveFilename if saveFilename else filename, 'FileID': temp}
 
 
 def flattenRow(rowDict):
@@ -943,6 +1001,7 @@ def flattenTable(tableDict):
     """
     return [flattenRow(row) for row in tableDict]
 
+
 MARKDOWN_CHARS = "\`*_{}[]()#+-!"
 
 
@@ -963,15 +1022,15 @@ def stringEscapeMD(st, minimal_escaping=False, escape_multiline=False):
        :rtype: ``str``
     """
     if escape_multiline:
-        st = st.replace('\r\n', '<br>')#Windows
-        st = st.replace('\r', '<br>')#old Mac
-        st = st.replace('\n', '<br>')#Unix
+        st = st.replace('\r\n', '<br>')  # Windows
+        st = st.replace('\r', '<br>')  # old Mac
+        st = st.replace('\n', '<br>')  # Unix
 
     if minimal_escaping:
         for c in '|':
             st = st.replace(c, '\\' + c)
     else:
-        st = "".join([ "\\" + str(c) if c in MARKDOWN_CHARS else str(c) for c in st])
+        st = "".join(["\\" + str(c) if c in MARKDOWN_CHARS else str(c) for c in st])
 
     return st
 
@@ -981,7 +1040,7 @@ def raiseTable(root, key):
     if key in root and isinstance(root[key], dict):
         for sub in root[key]:
             if sub not in root:
-                root[sub] =root[key][sub]
+                root[sub] = root[key][sub]
             else:
                 newInternal[sub] = root[key][sub]
         if newInternal:
@@ -1015,6 +1074,7 @@ def isCommandAvailable(cmd):
                     return True
     return False
 
+
 def epochToTimestamp(epoch):
     return datetime.utcfromtimestamp(epoch / 1000.0).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1037,7 +1097,7 @@ def strip_tag(tag):
 def elem_to_internal(elem, strip_ns=1, strip=1):
     """Convert an Element into an internal dictionary (not JSON!)."""
 
-    d = OrderedDict()
+    d = OrderedDict()  # type: dict
     elem_tag = elem.tag
     if strip_ns:
         elem_tag = strip_tag(elem.tag)
@@ -1081,7 +1141,7 @@ def elem_to_internal(elem, strip_ns=1, strip=1):
             d["#text"] = text
     else:
         # text is the value if no attributes
-        d = text or None
+        d = text or None  # type: ignore
     return {elem_tag: d}
 
 
@@ -1093,7 +1153,7 @@ def internal_to_elem(pfsh, factory=ET.Element):
     Element class as the factory parameter.
     """
 
-    attribs = OrderedDict()
+    attribs = OrderedDict()  # type: dict
     text = None
     tail = None
     sublist = []
@@ -1175,7 +1235,7 @@ def json2xml(json_data, factory=ET.Element):
         json_data = json.loads(json_data)
 
     elem = internal_to_elem(json_data, factory)
-    return ET.tostring(elem, encoding='unicode')
+    return ET.tostring(elem, encoding='utf-8')
 
 
 def get_hash_type(hash_file):
@@ -1226,7 +1286,8 @@ def return_outputs(readable_output, outputs, raw_response=None):
     This function wraps the demisto.results(), makes the usage of returning results to the user more intuitively.
 
     :type readable_output: ``str``
-    :param readable_output: markdown string that will be presented in the warroom, should be human readable - (HumanReadable)
+    :param readable_output: markdown string that will be presented in the warroom, should be human readable -
+        (HumanReadable)
 
     :type outputs: ``dict``
     :param outputs: the outputs that will be returned to playbook/investigation context (originally EntryContext)
@@ -1291,37 +1352,68 @@ def camelize(src, delim=' '):
         :return: The dictionary (or list of dictionaries) with the keys in CamelCase.
         :rtype: ``dict`` or ``list``
     """
+
     def camelize_str(src_str, delim):
+        if callable(getattr(src_str, "decode", None)):
+            src_str = src_str.decode('utf-8')
         components = src_str.split(delim)
-        return ''.join(map(lambda x: x.decode('utf-8').title(), components))
+        return ''.join(map(lambda x: x.title(), components))
 
     if isinstance(src, list):
-        return map(lambda x: camelize(x, delim), src)
-    src = {camelize_str(k, delim): v for k,v in src.iteritems()}
-    return src
+        return [camelize(x, delim) for x in src]
+    return {camelize_str(k, delim): v for k, v in src.items()}
 
 
 # Constants for common merge paths
 outputPaths = {
-  'file': 'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || val.SHA256 && val.SHA256 == obj.SHA256 || val.SHA512 && val.SHA512 == obj.SHA512 || val.CRC32 && val.CRC32 == obj.CRC32 || val.CTPH && val.CTPH == obj.CTPH)',
-  'ip': 'IP(val.Address && val.Address == obj.Address)',
-  'url': 'URL(val.Data && val.Data == obj.Data)',
-  'domain': 'Domain(val.Name && val.Name == obj.Name)',
-  'cve': 'CVE(val.ID && val.ID == obj.ID)',
-  'email': 'Account.Email(val.Address && val.Address == obj.Address)',
-  'dbotscore': 'DBotScore'
+    'file': 'File(val.MD5 && val.MD5 == obj.MD5 || val.SHA1 && val.SHA1 == obj.SHA1 || '
+            'val.SHA256 && val.SHA256 == obj.SHA256 || val.SHA512 && val.SHA512 == obj.SHA512 || '
+            'val.CRC32 && val.CRC32 == obj.CRC32 || val.CTPH && val.CTPH == obj.CTPH)',
+    'ip': 'IP(val.Address && val.Address == obj.Address)',
+    'url': 'URL(val.Data && val.Data == obj.Data)',
+    'domain': 'Domain(val.Name && val.Name == obj.Name)',
+    'cve': 'CVE(val.ID && val.ID == obj.ID)',
+    'email': 'Account.Email(val.Address && val.Address == obj.Address)',
+    'dbotscore': 'DBotScore'
 }
 
-############################### REGEX FORMATTING ###############################
-regexFlags = re.M #Multi line matching
-#for the global(/g) flag use re.findall({regex_format},str)
-#else, use re.match({regex_format},str)
+
+def replace_in_keys(src, existing='.', new='_'):
+    """
+        Replace a substring in all of the keys of a dictionary (or list of dictionaries)
+
+        :type src: ``dict`` or ``list``
+        :param src: The dictionary (or list of dictionaries) with keys that need replacement. (required)
+
+        :type existing: ``str``
+        :param existing: substring to replace.
+
+        :type new: ``str``
+        :param new: new substring that will replace the existing substring.
+
+        :return: The dictionary (or list of dictionaries) with keys after substring replacement.
+        :rtype: ``dict`` or ``list``
+    """
+    def replace_str(src_str):
+        if callable(getattr(src_str, "decode", None)):
+            src_str = src_str.decode('utf-8')
+        return src_str.replace(existing, new)
+
+    if isinstance(src, list):
+        return [replace_in_keys(x, existing, new) for x in src]
+    return {replace_str(k): v for k, v in src.items()}
+
+
+# ############################## REGEX FORMATTING ###############################
+regexFlags = re.M  # Multi line matching
+# for the global(/g) flag use re.findall({regex_format},str)
+# else, use re.match({regex_format},str)
 
 ipv4Regex = r'\b((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
 emailRegex = r'\b[^@]+@[^@]+\.[^@]+\b'
 hashRegex = r'\b[0-9a-fA-F]+\b'
-urlRegex = '(?:(?:https?|ftp|hxxps?):\/\/|www\[?\.\]?|ftp\[?\.\]?)(?:[-\w\d]+\[?\.\]?)+[-\w\d]+(?::\d+)?' \
-           '(?:(?:\/|\?)[-\w\d+&@#\/%=~_$?!\-:,.\(\);]*[\w\d+&@#\/%=~_$\(\);])?'
+urlRegex = r'(?:(?:https?|ftp|hxxps?):\/\/|www\[?\.\]?|ftp\[?\.\]?)(?:[-\w\d]+\[?\.\]?)+[-\w\d]+(?::\d+)?' \
+           r'(?:(?:\/|\?)[-\w\d+&@#\/%=~_$?!\-:,.\(\);]*[\w\d+&@#\/%=~_$\(\);])?'
 
 md5Regex = re.compile(r'\b[0-9a-fA-F]{32}\b', regexFlags)
 sha1Regex = re.compile(r'\b[0-9a-fA-F]{40}\b', regexFlags)
@@ -1329,7 +1421,7 @@ sha256Regex = re.compile(r'\b[0-9a-fA-F]{64}\b', regexFlags)
 
 pascalRegex = re.compile('([A-Z]?[a-z]+)')
 
-############################### REGEX FORMATTING end ###############################
+# ############################## REGEX FORMATTING end ###############################
 
 
 def underscoreToCamelCase(s):
@@ -1342,7 +1434,7 @@ def underscoreToCamelCase(s):
        :return: The converted string (e.g. HelloWorld)
        :rtype: ``str``
     """
-    if not isinstance(s, STRING_TYPES):
+    if not isinstance(s, STRING_OBJ_TYPES):
         return s
 
     components = s.split('_')
@@ -1378,8 +1470,8 @@ def snakify(src):
 
 def pascalToSpace(s):
     """
-       Converts pascal strings to human readable (e.g. "ThreatScore" -> "Threat Score", "thisIsIPAddressName" -> "This Is IP Address Name").
-       Could be used as headerTransform
+       Converts pascal strings to human readable (e.g. "ThreatScore" -> "Threat Score",  "thisIsIPAddressName" ->
+       "This Is IP Address Name"). Could be used as headerTransform
 
        :type s: ``str``
        :param s: The string to be converted (required)
@@ -1388,7 +1480,7 @@ def pascalToSpace(s):
        :rtype: ``str``
     """
 
-    if not isinstance(s, STRING_TYPES):
+    if not isinstance(s, STRING_OBJ_TYPES):
         return s
 
     tokens = pascalRegex.findall(s)
@@ -1412,8 +1504,8 @@ def string_to_table_header(string):
       :return: The converted string
       :rtype: ``str``
     """
-    if isinstance(string, STRING_TYPES):
-        return " ".join(word.capitalize() for word in string.replace("_"," ").split())
+    if isinstance(string, STRING_OBJ_TYPES):
+        return " ".join(word.capitalize() for word in string.replace("_", " ").split())
     else:
         raise Exception('The key is not a string: {}'.format(string))
 
@@ -1429,7 +1521,7 @@ def string_to_context_key(string):
      :return: The converted string
      :rtype: ``str``
     """
-    if isinstance(string, STRING_TYPES):
+    if isinstance(string, STRING_OBJ_TYPES):
         return "".join(word.capitalize() for word in string.split('_'))
     else:
         raise Exception('The key is not a string: {}'.format(string))
@@ -1457,7 +1549,8 @@ def parse_date_range(date_range, date_format=None, to_timestamp=False, timezone=
     """
     range_split = date_range.split(' ')
     if len(range_split) != 2:
-        return_error('date_range must be "number date_range_unit", examples: (2 hours, 4 minutes, 6 months, 1 day, etc.)')
+        return_error('date_range must be "number date_range_unit", examples: (2 hours, 4 minutes,6 months, 1 day, '
+                     'etc.)')
 
     number = int(range_split[0])
     if not range_split[1] in ['minute', 'minutes', 'hour', 'hours', 'day', 'days', 'month', 'months', 'year', 'years']:
@@ -1476,9 +1569,9 @@ def parse_date_range(date_range, date_format=None, to_timestamp=False, timezone=
     elif 'day' in unit:
         start_time = end_time - timedelta(days=number)
     elif 'month' in unit:
-        start_time = end_time - timedelta(days=number*30)
+        start_time = end_time - timedelta(days=number * 30)
     elif 'year' in unit:
-        start_time = end_time - timedelta(days=number*365)
+        start_time = end_time - timedelta(days=number * 365)
 
     if to_timestamp:
         return date_to_timestamp(start_time), date_to_timestamp(end_time)
@@ -1515,13 +1608,30 @@ def date_to_timestamp(date_str_or_dt, date_format='%Y-%m-%dT%H:%M:%S'):
       :param date_str_or_dt: The date to be parsed. (required)
 
       :type date_format: ``str``
-      :param date_format: The date format of the date string (will be ignored if date_str_or_dt is of type datetime.datetime). (optional)
+      :param date_format: The date format of the date string (will be ignored if date_str_or_dt is of type
+        datetime.datetime). (optional)
 
       :return: The parsed timestamp.
       :rtype: ``int``
     """
-    if isinstance(date_str_or_dt, STRING_TYPES):
-        return int(time.mktime(time.strptime(date_str_or_dt, date_format))*1000)
+    if isinstance(date_str_or_dt, STRING_OBJ_TYPES):
+        return int(time.mktime(time.strptime(date_str_or_dt, date_format)) * 1000)
 
     # otherwise datetime.datetime
-    return int(time.mktime(date_str_or_dt.timetuple())*1000)
+    return int(time.mktime(date_str_or_dt.timetuple()) * 1000)
+
+
+def remove_nulls_from_dictionary(dict):
+    """
+        Remove Null values from a dictionary. (updating the given dictionary)
+
+        :type data: ``dict``
+        :param data: The data to be added to the context (required)
+
+        :return: No data returned
+        :rtype: ``None``
+    """
+    list_of_keys = list(dict.keys())[:]
+    for key in list_of_keys:
+        if dict[key] in ('', None, [], {}, ()):
+            del dict[key]
