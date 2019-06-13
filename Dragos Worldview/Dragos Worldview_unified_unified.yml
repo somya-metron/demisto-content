@@ -1,0 +1,234 @@
+category: Data Enrichment & Threat Intelligence
+commonfields:
+  id: Dragos Worldview
+  version: -1
+configuration:
+- defaultvalue: https://intel.dragos.com
+  display: Server URL (e.g. https://example.net)
+  name: url
+  required: true
+  type: 0
+- display: API Token
+  name: apitoken
+  required: true
+  type: 4
+- display: API Secret
+  name: apisecret
+  required: true
+  type: 4
+- display: Trust any certificate (insecure)
+  name: insecure
+  required: false
+  type: 8
+- display: Use system proxy
+  name: proxy
+  required: false
+  type: 8
+description: Integration Template
+display: Dragos Worldview
+name: Dragos Worldview
+script:
+  commands:
+  - arguments:
+    - default: true
+      description: Hash of file to check
+      isArray: false
+      name: file
+      required: true
+      secret: false
+    deprecated: false
+    description: Retrieves information about a given file hash
+    execution: false
+    name: file
+    outputs:
+    - contextPath: Dragos.File.MD5
+      description: MD5 hash of file (if given)
+      type: String
+    - contextPath: Dragos.File.SHA1
+      description: SHA1 hash of file (if given)
+      type: String
+    - contextPath: Dragos.File.SHA256
+      description: SHA256 hash of file (if given)
+      type: String
+    - contextPath: Dragos.File.ActivityGroups
+      description: Activity group(s) associated with file
+      type: String
+    - contextPath: Dragos.File.AttackTechniques
+      description: MITRE ATT&CK Techniques this file is associated with
+      type: String
+    - contextPath: Dragos.File.PreAttackTechniques
+      description: MITRE Pre-ATT&CK Techniques this file is associated with
+      type: String
+    - contextPath: Dragos.File.KillChain
+      description: Stage of KillChain this file is associated with
+      type: String
+    - contextPath: Dragos.File.Comment
+      type: String
+    - contextPath: Dragos.File.Confidence
+      description: Confidence Dragos has in this indicator (low, moderate, high)
+      type: String
+    - contextPath: Dragos.File.Score
+      description: Dragos confidence extrapolated as DBot score
+      type: String
+    - contextPath: Dragos.File.FirstSeen
+      description: Date this file was first seen
+      type: Date
+    - contextPath: Dragos.File.LastSeen
+      description: Date this File was last seen
+      type: Date
+    - contextPath: Dragos.File.Updated
+      description: Date the indicator record for file was last updated
+      type: Date
+    - contextPath: Dragos.File.Products
+      description: The Dragos products this indicator is associated with
+      type: String
+    - contextPath: Dragos.File.UUID
+      description: The unique ID associated with this file
+      type: String
+    - contextPath: File.MD5
+      type: String
+    - contextPath: File.SHA1
+      type: String
+    - contextPath: File.SHA256
+      type: String
+    - contextPath: File.Malicious.Vendor
+      type: String
+    - contextPath: File.Malicious.Description
+      type: String
+    - contextPath: DBotScore.Type
+      type: String
+    - contextPath: DBotScore.Vendor
+      type: String
+    - contextPath: DBotScore.Score
+      type: String
+    - contextPath: DBotScore.Indicator
+      type: String
+  - arguments:
+    - default: true
+      description: The IP to lookup
+      isArray: false
+      name: ip
+      required: true
+      secret: false
+    deprecated: false
+    description: Retrieves information about a given IP address
+    execution: false
+    name: ip
+    outputs:
+    - contextPath: Dragos.IP.Value
+      description: Indicator name
+      type: String
+    - contextPath: Dragos.IP.ActivityGroups
+      description: Activity group(s) associated with indicator
+      type: String
+    - contextPath: Dragos.IP.AttackTechniques
+      description: MITRE ATT&CK Techniques this indicator has been associated with
+      type: String
+    - contextPath: Dragos.IP.PreAttackTechniques
+      description: MITRE Pre-ATT&CK Techniques this indicator has been associated
+        with
+      type: String
+    - contextPath: Dragos.IP.KillChain
+      description: Stage of KillChain this indicator is associated with
+      type: String
+    - contextPath: Dragos.IP.Comment
+      type: String
+    - contextPath: Dragos.IP.Confidence
+      description: Confidence Dragos has in this indicator (low, moderate, high)
+      type: String
+    - contextPath: Dragos.IP.Score
+      description: Dragos confidence extrapolated as DBot score
+      type: String
+    - contextPath: Dragos.IP.FirstSeen
+      description: Date this indicator was first seen
+      type: Date
+    - contextPath: Dragos.IP.LastSeen
+      description: Date this indicator was last seen
+      type: Date
+    - contextPath: Dragos.IP.Updated
+      description: Date the indicator record for indicator was last updated
+      type: Date
+    - contextPath: Dragos.IP.Products
+      description: The Dragos products this indicator is associated with
+      type: String
+    - contextPath: IP.Address
+      description: The IP address being searched for
+      type: String
+    - contextPath: IP.Malicious.Vendor
+      type: String
+    - contextPath: IP.Malicious.Description
+      type: String
+    - contextPath: DBotScore.Type
+      type: String
+    - contextPath: DBotScore.Vendor
+      type: String
+    - contextPath: DBotScore.Score
+      type: String
+    - contextPath: DBotScore.Indicator
+      type: String
+  - arguments:
+    - default: false
+      isArray: false
+      name: domain
+      required: false
+      secret: false
+    deprecated: false
+    execution: false
+    name: domain
+    outputs:
+    - contextPath: Dragos.Domain.Value
+      description: Indicator name
+      type: String
+    - contextPath: Dragos.Domain.ActivityGroups
+      description: Activity group(s) associated with indicator
+      type: String
+    - contextPath: Dragos.Domain.AttackTechniques
+      description: MITRE ATT&CK Techniques this indicator has been associated with
+      type: String
+    - contextPath: Dragos.Domain.PreAttackTechniques
+      description: MITRE Pre-ATT&CK Techniques this indicator has been associated
+        with
+      type: String
+    - contextPath: Dragos.Domain.KillChain
+      description: Stage of KillChain this indicator is associated with
+      type: String
+    - contextPath: Dragos.Domain.Comment
+      type: String
+    - contextPath: Dragos.Domain.Confidence
+      description: Confidence Dragos has in this indicator (low, moderate, high)
+      type: String
+    - contextPath: Dragos.Domain.Score
+      description: Dragos confidence extrapolated as DBot score
+      type: String
+    - contextPath: Dragos.Domain.FirstSeen
+      description: Date this indicator was first seen
+      type: Date
+    - contextPath: Dragos.Domain.LastSeen
+      description: Date this indicator was last seen
+      type: Date
+    - contextPath: Dragos.Domain.Updated
+      description: Date the indicator record for this indicator was last updated
+      type: Date
+    - contextPath: Dragos.Domain.Products
+      description: The Dragos products this indicator is associated with
+      type: String
+    - contextPath: Domain.Name
+      type: String
+    - contextPath: Domain.Malicious.Vendor
+      type: String
+    - contextPath: Domain.Malicious.Description
+      type: String
+    - contextPath: DBotScore.Type
+      type: String
+    - contextPath: DBotScore.Vendor
+      type: String
+    - contextPath: DBotScore.Score
+      type: String
+    - contextPath: DBotScore.Indicator
+      type: String
+  dockerimage: demisto/python3:latest
+  isfetch: false
+  runonce: false
+  script: ''
+  type: python
+image: data:image/png;base64,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
