@@ -62,16 +62,16 @@ def http_request(method, url_suffix, params=None, data=None, files=None):
     )
     # Handle error responses gracefully
     if res.status_code in {404}:
+        # Specific case to prevent error message if file not in Viper
         return False
     elif res.status_code not in {200}:
         return_error('Error in API call to Viper [%d] - %s' % (res.status_code, res.reason))
     return res.json()
 
 
-def http_post(params=None, data=None, files=None):
-    # A wrapper for requests lib to send our requests and handle requests and responses better
+def http_post(url_fragment, params=None, data=None, files=None):
     res = requests.request(
-        url=BASE_URL + 'project/default/malware/upload/',
+        url=BASE_URL + url_fragment,
         method='POST',
         verify=USE_SSL,
         params=params,
@@ -81,8 +81,9 @@ def http_post(params=None, data=None, files=None):
     )
     # Handle error responses gracefully
     if res.status_code not in {201}:
-        if res.json()['error']['code'] == 'DuplicateFileHash':
-            demisto.results('File already in Viper')
+        # Add status for updating tag entries with incident id if file already in Viper
+        if 'error' in res.json() and res.json()['error']['code'] == 'DuplicateFileHash':
+            return 'add tags'
         else:
             warning = {
                 'Type': 11,
@@ -91,7 +92,7 @@ def http_post(params=None, data=None, files=None):
             }
             demisto.results(warning)
     else:
-        demisto.results("Upload success!")
+        pass
     return res.json()
 
 def get_first(iterable, default=None):
@@ -128,6 +129,9 @@ def test_module():
 
 
 def viper_search_command():
+    """
+    Command called to index Viper database given a file hash
+    """
 
     #  Collect SHA56 hash from demisto details
     hash_value = demisto.args().get('file')
@@ -224,25 +228,45 @@ def viper_search_command():
         })
 
 def viper_hash_search(hash_value):
+    """
+    Performs search of Viper database given file hash
+    """
     url_fragment = 'project/default/malware/{}'.format(hash_value)
     response = http_request('GET', url_fragment, None, None, None)
     return response
 
 
 def viper_upload_command():
+    """
+    Command to upload a file to Viper database
+    """
 
     # Get entry id, filename and filepath
     file_entry = demisto.args().get('EntryID')
     filename = demisto.getFilePath(file_entry)['name']
     filepath = demisto.getFilePath(file_entry)['path']
 
+
     # Send file to Viper
     response = viper_upload(filepath, filename, file_entry.lower())
 
-
+    
+    # Update tags if necessary
+    if response == 'add tags':
+        curr_hash = demisto.context().get('File')[2]['SHA256']
+        url_fragment = "project/default/malware/{}/tag/".format(curr_hash)
+        curr_tags = [result['data']['tag'] for result in http_request('GET', url_fragment, None, None, None)['results']]
+        if file_entry not in curr_tags:
+            demisto.results("File already in Viper. Updating tags...")
+            data = {'tag': file_entry}
+            add_tags = http_post(url_fragment, None, data=data)
+        else:
+            demisto.results("File already in Viper. Viper entry is up to date.")
 
 def viper_upload(path, name, entry_id):
-
+    """
+    Performs upload of file to Viper database.
+    """
     # Get absolute filepath for upload
     new_path = os.path.abspath(path)
     files = {'file': (name, open(new_path, 'rb'))}
@@ -250,11 +274,8 @@ def viper_upload(path, name, entry_id):
 
 
     # Create some basic demisto-related tags to attach to file details on initial upload
-    data = {'tag_list': entry_id + ',' + str(date.today()) + ',' + 'demisto' + ',' + incident_name,
-            'note_title': ' ',
-            'note_body': ' '
-            }
-    upload = http_post(None, data=data, files=files)
+    data = {'tag_list': entry_id + ',' + str(date.today()) + ',' + 'demisto' + ',' + incident_name}
+    upload = http_post('project/default/malware/upload/', None, data=data, files=files)
     return upload
 
 
