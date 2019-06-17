@@ -81,12 +81,15 @@ def http_post(params=None, data=None, files=None):
     )
     # Handle error responses gracefully
     if res.status_code not in {201}:
-        warning = {
-            'Type': 11,
-            'Contents': 'Upload unsuccessful or file already exists',
-            'ContentsFormat': formats['markdown']
-        }
-        demisto.results(warning)
+        if res.json()['error']['code'] == 'DuplicateFileHash':
+            demisto.results('File already in Viper')
+        else:
+            warning = {
+                'Type': 11,
+                'Contents': 'Upload unsuccessful',
+                'ContentsFormat': formats['markdown']
+            }
+            demisto.results(warning)
     else:
         demisto.results("Upload success!")
     return res.json()
@@ -233,20 +236,24 @@ def viper_upload_command():
     filename = demisto.getFilePath(file_entry)['name']
     filepath = demisto.getFilePath(file_entry)['path']
 
-    # send file to Viper
+    # Send file to Viper
     response = viper_upload(filepath, filename, file_entry.lower())
+
 
 
 def viper_upload(path, name, entry_id):
 
-    # get absolute filepath for upload
+    # Get absolute filepath for upload
     new_path = os.path.abspath(path)
     files = {'file': (name, open(new_path, 'rb'))}
     incident_name = demisto.get(demisto.investigation(), 'name')
 
 
-    # create some basic demisto-related tags to attach to file details on initial upload
-    data = {'tag_list': entry_id + ',' + str(date.today()) + ',' + 'demisto' + ',' + incident_name}
+    # Create some basic demisto-related tags to attach to file details on initial upload
+    data = {'tag_list': entry_id + ',' + str(date.today()) + ',' + 'demisto' + ',' + incident_name,
+            'note_title': ' ',
+            'note_body': ' '
+            }
     upload = http_post(None, data=data, files=files)
     return upload
 
