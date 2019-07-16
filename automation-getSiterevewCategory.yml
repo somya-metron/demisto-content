@@ -1,0 +1,10 @@
+commonfields:
+  id: 6cf86ca2-2e32-4657-83da-2968d76423e6
+  version: 1
+name: getSiterevewCategory
+script: ""
+type: python
+tags: []
+scripttarget: 0
+runonce: false
+runas: DBotWeakRole
